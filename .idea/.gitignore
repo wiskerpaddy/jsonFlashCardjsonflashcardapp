@@ -1,0 +1,37 @@
+# --- Android Studio / IntelliJ ---
+.gradle/
+build/
+captures/
+.externalNativeBuild/
+.cxx/
+local.properties
+.idea/caches/
+.idea/libraries/
+.idea/modules.xml
+.idea/workspace.xml
+.idea/navEditor.xml
+.idea/assetWizardSettings.xml
+*.iml
+.deviceExplorer/
+
+# --- Kotlin / JVM ---
+*.class
+/build
+
+# --- Android 特定 ---
+*.apk
+*.ap_
+*.dex
+*.keystore
+# 署名ファイルは絶対にリポジトリに入れない
+/debug.keystore
+/release.keystore
+
+# --- データファイル (ここが重要) ---
+# アプリ実行時に生成されるJSONファイルを除外したい場合
+# (リポジトリをクリーンに保ち、個人データを含めないため)
+cards.json
+
+# --- OS / システム ---
+.DS_Store
+Thumbs.db

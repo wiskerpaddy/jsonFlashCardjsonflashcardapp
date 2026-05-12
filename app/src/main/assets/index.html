@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Shadow Rogue Dungeon</title>
+    
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div id="game-container">
+        <div id="top-bar">
+            <div class="lang-selector">
+                <button id="btn-ja" class="lang-btn" onclick="setLang('ja')">JP</button>
+                <button id="btn-en" class="lang-btn" onclick="setLang('en')">EN</button>
+                <button id="btn-es" class="lang-btn" onclick="setLang('es')">ES</button>
+                <button id="mute-btn" class="lang-btn" onclick="toggleMute()">🔊</button>
+            </div>
+            <div class="top-icons">
+                <div class="ach-circle" id="ach-btn" onclick="toggleAchievements()">🏆</div>
+                <div class="help-circle" onclick="openGuide()">?</div>
+            </div>
+        </div>
+        <div id="ach-overlay" style="display:none;" onclick="toggleAchievements()">
+            <div class="ach-modal" onclick="event.stopPropagation()">
+                <h3 id="ach-modal-title">Achievements</h3>
+                <div id="ach-list"></div>
+                <button class="close-btn" onclick="toggleAchievements()">Close</button>
+            </div>
+        </div>
+
+        <div id="guide-overlay" onclick="closeGuide()">
+            <div class="guide-title" id="g-title"></div>
+            <div class="guide-text" id="g-body"></div>
+            <div style="font-size:11px; color:#888;">Tap to Start / 画面をタップして開始</div>
+        </div>
+
+        <div id="screen"></div>
+        <div id="log"></div>
+        
+        <div id="controls">
+            <div class="btn" id="warp-btn" onclick="useSkill()">WARP</div>
+            <div class="btn" id="up" onclick="handleInput(0, -1)">↑</div>
+            <!-- <div class="btn" id="shock-btn" onclick="useShockwave()">WAVE</div> -->
+            <div class="btn" id="left" onclick="handleInput(-1, 0)">←</div>
+            <div class="btn" id="wait" onclick="handleInput(0, 0)">WAIT</div>
+            <div class="btn" id="right" onclick="handleInput(1, 0)">→</div>
+            <div class="btn" id="down" onclick="handleInput(0, 1)">↓</div>
+        </div>
+    </div>
+    <script src="config.js"></script>
+    <script src="game.js"></script>
+</body>
+</html>

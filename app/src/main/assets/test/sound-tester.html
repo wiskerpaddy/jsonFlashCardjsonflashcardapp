@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>ShadowRogue - CONST変数サウンドチェッカー</title>
+    <script src="../config.js"></script>
+    <style>
+        body { background: #121212; color: #00ff00; font-family: 'Consolas', monospace; padding: 20px; }
+        .header { border-bottom: 2px solid #00ff00; margin-bottom: 20px; padding-bottom: 10px; }
+        .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 15px; }
+        .sound-card { 
+            background: #1e1e1e; border: 1px solid #333; padding: 15px; border-radius: 5px;
+            display: flex; flex-direction: column; gap: 10px;
+        }
+        .var-name { color: #ffcc00; font-weight: bold; font-size: 14px; }
+        button { 
+            background: #00ff00; color: #000; border: none; padding: 10px; 
+            cursor: pointer; font-weight: bold; border-radius: 3px;
+        }
+        button:hover { background: #00cc00; }
+        .details { font-size: 11px; color: #888; white-space: pre-wrap; }
+    </style>
+</head>
+<body>
+
+    <div class="header">
+        <h1>🔊 SOUND_DATA Inspector</h1>
+        <p>config.js 内の定数を読み込み、ボタンを自動生成しました。</p>
+    </div>
+
+    <div id="test-grid" class="grid">
+        </div>
+
+    <script>
+        let audioCtx = null;
+
+        // 音を鳴らすメイン関数
+        function play(data) {
+            if (!audioCtx) {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            }
+            if (audioCtx.state === 'suspended') audioCtx.resume();
+
+            const sounds = Array.isArray(data) ? data : [data];
+            const now = audioCtx.currentTime;
+
+            sounds.forEach((s, i) => {
+                const osc = audioCtx.createOscillator();
+                const gain = audioCtx.createGain();
+                // 配列（和音・連続音）の場合は少しずつ遅延させる
+                const startTime = now + (Array.isArray(data) ? i * 0.1 : 0);
+
+                osc.type = s.type || 'sine';
+                osc.frequency.setValueAtTime(s.freq, startTime);
+                
+                // 減衰処理
+                gain.gain.setValueAtTime(s.gain || 0.1, startTime);
+                gain.gain.exponentialRampToValueAtTime(0.001, startTime + s.dur);
+
+                osc.connect(gain);
+                gain.connect(audioCtx.destination);
+
+                osc.start(startTime);
+                osc.stop(startTime + s.dur);
+            });
+        }
+
+        // ページ読み込み時に SOUND_DATA の中身をスキャンしてボタンを作る
+        window.onload = () => {
+            const grid = document.getElementById('test-grid');
+
+            if (typeof SOUND_DATA === 'undefined') {
+                grid.innerHTML = "<p style='color:red;'>Error: config.js が正しく読み込めていないか、SOUND_DATA が定義されていません。</p>";
+                return;
+            }
+
+            Object.keys(SOUND_DATA).forEach(key => {
+                const data = SOUND_DATA[key];
+                
+                // カード作成
+                const card = document.createElement('div');
+                card.className = 'sound-card';
+
+                // 変数名表示
+                const title = document.createElement('div');
+                title.className = 'var-name';
+                title.textContent = `SOUND_DATA.${key}`;
+
+                // 詳細データ表示（デバッグ用）
+                const details = document.createElement('div');
+                details.className = 'details';
+                details.textContent = JSON.stringify(data, null, 2);
+
+                // 再生ボタン
+                const btn = document.createElement('button');
+                btn.textContent = "▶ PLAY";
+                btn.onclick = () => play(data);
+
+                card.appendChild(title);
+                card.appendChild(btn);
+                card.appendChild(details);
+                grid.appendChild(card);
+            });
+        };
+    </script>
+</body>
+</html>
