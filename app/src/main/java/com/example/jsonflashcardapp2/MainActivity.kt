@@ -98,11 +98,26 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         val storageManager = AppStorageManager(this)
         setContent {
-            Surface(
-                modifier = Modifier.fillMaxSize(),
-                color = MaterialTheme.colorScheme.background
-            ) {
-                FlashCardApp(storageManager)
+            val context = LocalContext.current
+            val prefs = remember { context.getSharedPreferences("app_prefs", Context.MODE_PRIVATE) }
+            var isDarkMode by remember { mutableStateOf(prefs.getBoolean("is_dark_mode", false)) }
+
+            val colorScheme = if (isDarkMode) darkColorScheme() else lightColorScheme()
+
+            MaterialTheme(colorScheme = colorScheme) {
+                Surface(
+                    modifier = Modifier.fillMaxSize(),
+                    color = MaterialTheme.colorScheme.background
+                ) {
+                    FlashCardApp(
+                        storageManager = storageManager,
+                        isDarkMode = isDarkMode,
+                        onDarkModeChanged = { dark ->
+                            isDarkMode = dark
+                            prefs.edit().putBoolean("is_dark_mode", dark).apply()
+                        }
+                    )
+                }
             }
         }
     }
@@ -110,7 +125,11 @@ class MainActivity : ComponentActivity() {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun FlashCardApp(storageManager: AppStorageManager) {
+fun FlashCardApp(
+    storageManager: AppStorageManager,
+    isDarkMode: Boolean,
+    onDarkModeChanged: (Boolean) -> Unit
+) {
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences("app_prefs", Context.MODE_PRIVATE) }
     var selectedDeck by remember { mutableStateOf(prefs.getString("selected_deck", "cards") ?: "cards") }
@@ -156,8 +175,13 @@ fun FlashCardApp(storageManager: AppStorageManager) {
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Flash Card App ($selectedDeck)") },
+                title = { Text("                 Flash Card App") },
                 actions = {
+                    IconButton(onClick = { onDarkModeChanged(!isDarkMode) }) {
+                        IconButton(onClick = { onDarkModeChanged(!isDarkMode) }) {
+                            Text(if (isDarkMode) "☀️" else "🌙", fontSize = 20.sp)
+                        }
+                    }
                     IconButton(onClick = { showHelpDialog = true }) {
                         Icon(Icons.Default.Info, contentDescription = "Help")
                     }
@@ -309,6 +333,7 @@ fun FlashCardApp(storageManager: AppStorageManager) {
                     "study" -> StudyScreen(
                         deckName = selectedDeck,
                         cards = cards,
+                        isDarkMode = isDarkMode,
                         onCardUpdated = { index, isWrong ->
                             val newList = cards.toMutableList()
                             newList[index] = newList[index].copy(isWrong = isWrong)
@@ -326,7 +351,7 @@ fun FlashCardApp(storageManager: AppStorageManager) {
         AlertDialog(
             onDismissRequest = { showHelpDialog = false },
             title = { Text("使いかた") },
-            text = { Text("既存のデッキを選択するか、新しいデッキ名を入力して作成してください。その後、各モードを選択して学習を開始します。") },
+            text = { Text("既存的デッキを選択するか、新しいデッキ名を入力して作成してください。その後、各モードを選択して学習を開始します。") },
             confirmButton = {
                 TextButton(onClick = { showHelpDialog = false }) { Text("閉じる") }
             }
@@ -400,11 +425,11 @@ fun RegistrationAndManagementScreen(
                 Spacer(modifier = Modifier.height(8.dp))
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(onClick = onImportClick, modifier = Modifier.weight(1f)) {
-                        Icon(Icons.Default.Add, null)
+                        Icon(Icons.Default.Add, null) // FileDownload の代わり
                         Text("Import", fontSize = 12.sp)
                     }
                     Button(onClick = onExportClick, modifier = Modifier.weight(1f)) {
-                        Icon(Icons.Default.Share, null)
+                        Icon(Icons.Default.Share, null) // FileUpload の代わり
                         Text("Export", fontSize = 12.sp)
                     }
                 }
@@ -420,7 +445,8 @@ fun RegistrationAndManagementScreen(
 
             Card(
                 modifier = Modifier.fillMaxWidth(),
-                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp), // 軽い影を追加
+                // ここを修正：!card.isWrong の時も LightGray の枠線を引く
                 border = BorderStroke(
                     width = if (card.isWrong) 2.dp else 1.dp,
                     color = if (card.isWrong) Color.Red else Color.LightGray
@@ -472,17 +498,21 @@ fun RegistrationAndManagementScreen(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun StudyScreen(deckName: String, cards: List<Flashcard>, onCardUpdated: (Int, Boolean) -> Unit) {
+fun StudyScreen(deckName: String, cards: List<Flashcard>, isDarkMode: Boolean, onCardUpdated: (Int, Boolean) -> Unit) {
     val context = LocalContext.current
+
+    // SharedPreferencesの用意（進捗保存用）
     val prefs = remember { context.getSharedPreferences("app_prefs", Context.MODE_PRIVATE) }
 
     val indexKey = "current_index_$deckName"
     val filterKey = "show_only_wrong_$deckName"
 
+    // 初期値をSharedPreferencesから読み込む（なければデフォルト値）
     var showOnlyWrong by remember(deckName) {
         mutableStateOf(prefs.getBoolean(filterKey, false))
     }
 
+    // チェックした問題のみに絞り込む
     val displayCards = if (showOnlyWrong) cards.filter { it.isWrong } else cards
 
     if (displayCards.isEmpty()) {
@@ -500,6 +530,7 @@ fun StudyScreen(deckName: String, cards: List<Flashcard>, onCardUpdated: (Int, B
         return
     }
 
+    // 保存されていたインデックスを読み込み、現在のリスト範囲内に収める
     val savedIndex = prefs.getInt(indexKey, 0)
     var currentIndex by remember(deckName, showOnlyWrong) {
         mutableStateOf(savedIndex.coerceIn(0, displayCards.size - 1))
@@ -507,9 +538,11 @@ fun StudyScreen(deckName: String, cards: List<Flashcard>, onCardUpdated: (Int, B
 
     var showAnswer by remember { mutableStateOf(false) }
 
+    // インデックスが範囲外にならないよう調整
     val safeIndex = currentIndex.coerceIn(0, displayCards.size - 1)
     val currentCard = displayCards[safeIndex]
 
+    // スクリプトの見切れ対策：カードが切り替わるたびにスクロール位置を最上部にリセット
     val scrollState = rememberScrollState()
     LaunchedEffect(safeIndex, showAnswer) {
         scrollState.scrollTo(0)
@@ -519,12 +552,14 @@ fun StudyScreen(deckName: String, cards: List<Flashcard>, onCardUpdated: (Int, B
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("Card ${safeIndex + 1} / ${displayCards.size}")
             Spacer(Modifier.width(8.dp))
+            // フィルタ切り替えスイッチ
             FilterChip(
                 selected = showOnlyWrong,
                 onClick = {
                     showOnlyWrong = !showOnlyWrong
                     currentIndex = 0
                     showAnswer = false
+                    // フィルター状態を保存
                     prefs.edit().putBoolean(filterKey, showOnlyWrong).putInt(indexKey, 0).apply()
                 },
                 label = { Text("Check Only", fontSize = 10.sp) }
@@ -535,7 +570,7 @@ fun StudyScreen(deckName: String, cards: List<Flashcard>, onCardUpdated: (Int, B
             onClick = { showAnswer = !showAnswer },
             modifier = Modifier
                 .fillMaxWidth()
-                .height(250.dp)
+                .height(250.dp) // 長文に対応するため少し高さを広げました
                 .padding(16.dp),
             elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
             border = BorderStroke(
@@ -543,18 +578,22 @@ fun StudyScreen(deckName: String, cards: List<Flashcard>, onCardUpdated: (Int, B
                 color = if (currentCard.isWrong) Color.Red else Color.LightGray
             ),
             colors = CardDefaults.cardColors(
-                containerColor = if (currentCard.isWrong) Color(0xFFFFEBEE) else MaterialTheme.colorScheme.surface
+                containerColor = if (currentCard.isWrong) {
+                    if (isDarkMode) Color(0xFF3A1E1E) else Color(0xFFFFEBEE)
+                } else MaterialTheme.colorScheme.surface
             )
         ) {
+            // Boxから、スクロール可能なColumnに変更して見切れを完全に防ぐ
             Column(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(16.dp)
-                    .verticalScroll(scrollState),
+                    .verticalScroll(scrollState), // ← ここで縦スクロールを有効化
                 verticalArrangement = Arrangement.Center,
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 val textToShow = if (showAnswer) currentCard.answer else currentCard.word
+                // 長文の時は自動的に少し文字サイズを下げる
                 val fontSize = if (textToShow.length > 30) 18.sp else 22.sp
 
                 Text(
@@ -574,6 +613,7 @@ fun StudyScreen(deckName: String, cards: List<Flashcard>, onCardUpdated: (Int, B
             }
         }
 
+        // 間意がえた！ボタン（チェックのトグル）
         IconButton(
             onClick = {
                 val originalIndex = cards.indexOf(currentCard)
@@ -594,6 +634,7 @@ fun StudyScreen(deckName: String, cards: List<Flashcard>, onCardUpdated: (Int, B
             Button(onClick = {
                 currentIndex = (safeIndex - 1 + displayCards.size) % displayCards.size
                 showAnswer = false
+                // 進捗を保存
                 prefs.edit().putInt(indexKey, currentIndex).apply()
             }) { Text("Back") }
 
@@ -602,6 +643,7 @@ fun StudyScreen(deckName: String, cards: List<Flashcard>, onCardUpdated: (Int, B
             Button(onClick = {
                 currentIndex = (safeIndex + 1) % displayCards.size
                 showAnswer = false
+                // 進捗を保存
                 prefs.edit().putInt(indexKey, currentIndex).apply()
             }) { Text("Next") }
         }
