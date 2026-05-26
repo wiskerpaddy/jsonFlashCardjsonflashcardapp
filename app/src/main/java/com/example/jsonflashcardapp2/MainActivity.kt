@@ -120,6 +120,7 @@ fun FlashCardApp(storageManager: AppStorageManager) {
     var newDeckName by remember { mutableStateOf("") }
     var showMenu by remember { mutableStateOf(false) }
     var showError by remember { mutableStateOf(false) }
+    var showHelpDialog by remember { mutableStateOf(false) }
 
     LaunchedEffect(selectedDeck) {
         cards = storageManager.loadCards(selectedDeck)
@@ -153,7 +154,16 @@ fun FlashCardApp(storageManager: AppStorageManager) {
     }
 
     Scaffold(
-        topBar = { TopAppBar(title = { Text("Flash Card App ($selectedDeck)") }) }
+        topBar = {
+            TopAppBar(
+                title = { Text("Flash Card App ($selectedDeck)") },
+                actions = {
+                    IconButton(onClick = { showHelpDialog = true }) {
+                        Icon(Icons.Default.Info, contentDescription = "Help")
+                    }
+                }
+            )
+        }
     ) { innerPadding ->
         Column(
             modifier = Modifier.fillMaxSize().padding(innerPadding).padding(16.dp)
@@ -164,61 +174,119 @@ fun FlashCardApp(storageManager: AppStorageManager) {
                     verticalArrangement = Arrangement.Center,
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    Text(
-                        text = "使いかた：既存のデッキを選択するか、新しいデッキ名を入力して作成してください。その後、各モードを選択して学習を開始します。",
-                        fontSize = 14.sp,
-                        color = Color.Gray,
-                        modifier = Modifier.padding(bottom = 24.dp)
-                    )
-                    Box {
-                        Button(onClick = { showMenu = true }) {
-                            Text("Deck: $selectedDeck")
-                            Icon(Icons.Default.ArrowDropDown, null)
-                        }
-                        DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
-                            deckList.forEach { deck ->
-                                DropdownMenuItem(text = { Text(deck) }, onClick = {
-                                    selectedDeck = deck
-                                    showMenu = false
-                                })
+//                    Text(
+//                        text = "使いかた：既存のデッキを選択するか、新しいデッキ名を入力して作成してください。その後、各モードを選択して学習を開始します。",
+//                        fontSize = 14.sp,
+//                        color = Color.Gray,
+//                        modifier = Modifier.padding(bottom = 24.dp)
+//                    )
+
+                    // デッキ管理エリア
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f))
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(16.dp).fillMaxWidth(),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(16.dp)
+                        ) {
+                            Text("デッキ管理", fontWeight = FontWeight.Bold, fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+
+                            // 横幅を統一したデッキ選択
+                            Box(modifier = Modifier.fillMaxWidth(0.85f), contentAlignment = Alignment.Center) {
+                                Button(
+                                    onClick = { showMenu = true },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    shape = CircleShape
+                                ) {
+                                    Text("Deck: $selectedDeck")
+                                    Icon(Icons.Default.ArrowDropDown, null)
+                                }
+                                DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
+                                    deckList.forEach { deck ->
+                                        DropdownMenuItem(text = { Text(deck) }, onClick = {
+                                            selectedDeck = deck
+                                            showMenu = false
+                                        })
+                                    }
+                                }
+                            }
+
+                            // 高さとカプセル形状を完全に同期させ、文字視認性を確保したエリア
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.Center,
+                                modifier = Modifier.fillMaxWidth(0.85f)
+                            ) {
+                                OutlinedTextField(
+                                    value = newDeckName,
+                                    onValueChange = {
+                                        newDeckName = it
+                                        if (it.isNotBlank()) showError = false
+                                    },
+                                    placeholder = { Text("New Deck Name", fontSize = 14.sp) },
+                                    modifier = Modifier.weight(1f).height(56.dp),
+                                    shape = CircleShape,
+                                    isError = showError,
+                                    singleLine = true
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Button(
+                                    onClick = {
+                                        if (newDeckName.isNotBlank()) {
+                                            val name = newDeckName.trim()
+                                            storageManager.saveCards(name, emptyList())
+                                            deckList = storageManager.getDeckList()
+                                            selectedDeck = name
+                                            newDeckName = ""
+                                            showError = false
+                                        } else {
+                                            showError = true
+                                        }
+                                    },
+                                    modifier = Modifier.height(56.dp),
+                                    shape = CircleShape
+                                ) { Text("Create") }
+                            }
+
+                            // エラーテキストをRowの外側に配置してテキスト潰れと位置ズレを防止
+                            Box(
+                                modifier = Modifier.fillMaxWidth(0.85f).height(16.dp),
+                                contentAlignment = Alignment.CenterStart
+                            ) {
+                                if (showError) {
+                                    Text("デッキ名を入力してください", color = Color.Red, fontSize = 12.sp, modifier = Modifier.padding(start = 16.dp))
+                                }
                             }
                         }
                     }
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        TextField(
-                            value = newDeckName,
-                            onValueChange = { newDeckName = it },
-                            placeholder = { Text("New Deck Name") },
-                            modifier = Modifier.width(150.dp)
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Button(onClick = {
-                            if (newDeckName.isNotBlank()) {
-                                val name = newDeckName.trim()
-                                storageManager.saveCards(name, emptyList())
-                                deckList = storageManager.getDeckList()
-                                selectedDeck = name
-                                newDeckName = ""
-                                showError = false
-                            } else {
-                                showError = true
-                            }
-                        }) { Text("Create") }
-                    }
-                    if (showError) {
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text("デッキ名を入力してください", color = Color.Red, fontSize = 12.sp)
-                    }
+
                     Spacer(modifier = Modifier.height(24.dp))
-                    Button(onClick = { currentMode = "register" }) { Text("Reg/Edit Mode") }
-                    Spacer(modifier = Modifier.height(16.dp))
-                    Button(onClick = { currentMode = "study" }) { Text("Flash Mode") }
-                    Spacer(modifier = Modifier.height(16.dp))
-                    Button(
-                        onClick = { currentMode = "game" },
-                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary)
-                    ) { Text("Mini Game Activate") }
+
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text("学習モード選択", fontWeight = FontWeight.Bold, fontSize = 14.sp, color = Color.Gray)
+
+                        OutlinedButton(
+                            onClick = { currentMode = "register" },
+                            modifier = Modifier.fillMaxWidth(0.8f).height(50.dp)
+                        ) { Text("Reg/Edit Mode") }
+
+                        Button(
+                            onClick = { currentMode = "study" },
+                            modifier = Modifier.fillMaxWidth(0.8f).height(50.dp)
+                        ) { Text("Flash Mode", fontWeight = FontWeight.Bold) }
+
+                        OutlinedButton(
+                            onClick = { currentMode = "game" },
+                            modifier = Modifier.fillMaxWidth(0.8f).height(50.dp),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.secondary)
+                        ) { Text("Mini Game Activate") }
+                    }
                 }
             } else {
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
@@ -252,6 +320,17 @@ fun FlashCardApp(storageManager: AppStorageManager) {
                 }
             }
         }
+    }
+
+    if (showHelpDialog) {
+        AlertDialog(
+            onDismissRequest = { showHelpDialog = false },
+            title = { Text("使いかた") },
+            text = { Text("既存のデッキを選択するか、新しいデッキ名を入力して作成してください。その後、各モードを選択して学習を開始します。") },
+            confirmButton = {
+                TextButton(onClick = { showHelpDialog = false }) { Text("閉じる") }
+            }
+        )
     }
 }
 
@@ -321,11 +400,11 @@ fun RegistrationAndManagementScreen(
                 Spacer(modifier = Modifier.height(8.dp))
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(onClick = onImportClick, modifier = Modifier.weight(1f)) {
-                        Icon(Icons.Default.Add, null) // FileDownload の代わり
+                        Icon(Icons.Default.Add, null)
                         Text("Import", fontSize = 12.sp)
                     }
                     Button(onClick = onExportClick, modifier = Modifier.weight(1f)) {
-                        Icon(Icons.Default.Share, null) // FileUpload の代わり
+                        Icon(Icons.Default.Share, null)
                         Text("Export", fontSize = 12.sp)
                     }
                 }
@@ -341,8 +420,7 @@ fun RegistrationAndManagementScreen(
 
             Card(
                 modifier = Modifier.fillMaxWidth(),
-                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp), // 軽い影を追加
-                // ここを修正：!card.isWrong の時も LightGray の枠線を引く
+                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
                 border = BorderStroke(
                     width = if (card.isWrong) 2.dp else 1.dp,
                     color = if (card.isWrong) Color.Red else Color.LightGray
@@ -396,19 +474,15 @@ fun RegistrationAndManagementScreen(
 @Composable
 fun StudyScreen(deckName: String, cards: List<Flashcard>, onCardUpdated: (Int, Boolean) -> Unit) {
     val context = LocalContext.current
-
-    // SharedPreferencesの用意（進捗保存用）
     val prefs = remember { context.getSharedPreferences("app_prefs", Context.MODE_PRIVATE) }
 
     val indexKey = "current_index_$deckName"
     val filterKey = "show_only_wrong_$deckName"
 
-    // 初期値をSharedPreferencesから読み込む（なければデフォルト値）
     var showOnlyWrong by remember(deckName) {
         mutableStateOf(prefs.getBoolean(filterKey, false))
     }
 
-    // チェックした問題のみに絞り込む
     val displayCards = if (showOnlyWrong) cards.filter { it.isWrong } else cards
 
     if (displayCards.isEmpty()) {
@@ -426,7 +500,6 @@ fun StudyScreen(deckName: String, cards: List<Flashcard>, onCardUpdated: (Int, B
         return
     }
 
-    // 保存されていたインデックスを読み込み、現在のリスト範囲内に収める
     val savedIndex = prefs.getInt(indexKey, 0)
     var currentIndex by remember(deckName, showOnlyWrong) {
         mutableStateOf(savedIndex.coerceIn(0, displayCards.size - 1))
@@ -434,11 +507,9 @@ fun StudyScreen(deckName: String, cards: List<Flashcard>, onCardUpdated: (Int, B
 
     var showAnswer by remember { mutableStateOf(false) }
 
-    // インデックスが範囲外にならないよう調整
     val safeIndex = currentIndex.coerceIn(0, displayCards.size - 1)
     val currentCard = displayCards[safeIndex]
 
-    // スクリプトの見切れ対策：カードが切り替わるたびにスクロール位置を最上部にリセット
     val scrollState = rememberScrollState()
     LaunchedEffect(safeIndex, showAnswer) {
         scrollState.scrollTo(0)
@@ -448,14 +519,12 @@ fun StudyScreen(deckName: String, cards: List<Flashcard>, onCardUpdated: (Int, B
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("Card ${safeIndex + 1} / ${displayCards.size}")
             Spacer(Modifier.width(8.dp))
-            // フィルタ切り替えスイッチ
             FilterChip(
                 selected = showOnlyWrong,
                 onClick = {
                     showOnlyWrong = !showOnlyWrong
                     currentIndex = 0
                     showAnswer = false
-                    // フィルター状態を保存
                     prefs.edit().putBoolean(filterKey, showOnlyWrong).putInt(indexKey, 0).apply()
                 },
                 label = { Text("Check Only", fontSize = 10.sp) }
@@ -466,7 +535,7 @@ fun StudyScreen(deckName: String, cards: List<Flashcard>, onCardUpdated: (Int, B
             onClick = { showAnswer = !showAnswer },
             modifier = Modifier
                 .fillMaxWidth()
-                .height(250.dp) // 長文に対応するため少し高さを広げました
+                .height(250.dp)
                 .padding(16.dp),
             elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
             border = BorderStroke(
@@ -477,17 +546,15 @@ fun StudyScreen(deckName: String, cards: List<Flashcard>, onCardUpdated: (Int, B
                 containerColor = if (currentCard.isWrong) Color(0xFFFFEBEE) else MaterialTheme.colorScheme.surface
             )
         ) {
-            // Boxから、スクロール可能なColumnに変更して見切れを完全に防ぐ
             Column(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(16.dp)
-                    .verticalScroll(scrollState), // ← ここで縦スクロールを有効化
+                    .verticalScroll(scrollState),
                 verticalArrangement = Arrangement.Center,
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 val textToShow = if (showAnswer) currentCard.answer else currentCard.word
-                // 長文の時は自動的に少し文字サイズを下げる
                 val fontSize = if (textToShow.length > 30) 18.sp else 22.sp
 
                 Text(
@@ -507,7 +574,6 @@ fun StudyScreen(deckName: String, cards: List<Flashcard>, onCardUpdated: (Int, B
             }
         }
 
-        // 間意がえた！ボタン（チェックのトグル）
         IconButton(
             onClick = {
                 val originalIndex = cards.indexOf(currentCard)
@@ -528,7 +594,6 @@ fun StudyScreen(deckName: String, cards: List<Flashcard>, onCardUpdated: (Int, B
             Button(onClick = {
                 currentIndex = (safeIndex - 1 + displayCards.size) % displayCards.size
                 showAnswer = false
-                // 進捗を保存
                 prefs.edit().putInt(indexKey, currentIndex).apply()
             }) { Text("Back") }
 
@@ -537,7 +602,6 @@ fun StudyScreen(deckName: String, cards: List<Flashcard>, onCardUpdated: (Int, B
             Button(onClick = {
                 currentIndex = (safeIndex + 1) % displayCards.size
                 showAnswer = false
-                // 進捗を保存
                 prefs.edit().putInt(indexKey, currentIndex).apply()
             }) { Text("Next") }
         }
