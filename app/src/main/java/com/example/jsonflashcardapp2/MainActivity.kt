@@ -42,23 +42,33 @@ data class Flashcard(
     val word: String,
     val answer: String,
     val tags: List<String> = emptyList(),
-    val isWrong: Boolean = false // ← 追加
+    val isWrong: Boolean = false, // ← 追加
+    val memo: String = ""
 )
 
 // 2. 保存管理クラス
-class AppStorageManager(context: Context) {
-    private val file = File(context.filesDir, "cards.json")
+class AppStorageManager(private val context: Context) {
     private val json = Json {
         prettyPrint = true
         ignoreUnknownKeys = true
     }
 
-    fun saveCards(cards: List<Flashcard>) {
-        val jsonString = json.encodeToString(cards)
-        file.writeText(jsonString)
+    fun getDeckList(): List<String> {
+        return context.filesDir.listFiles { _, name -> name.endsWith(".json") }
+            ?.map { it.nameWithoutExtension }?.sorted() ?: listOf("cards")
     }
 
-    fun loadCards(): List<Flashcard> {
+    private fun getFileForDeck(deckName: String): File {
+        return File(context.filesDir, "$deckName.json")
+    }
+
+    fun saveCards(deckName: String, cards: List<Flashcard>) {
+        val jsonString = json.encodeToString(cards)
+        getFileForDeck(deckName).writeText(jsonString)
+    }
+
+    fun loadCards(deckName: String): List<Flashcard> {
+        val file = getFileForDeck(deckName)
         return try {
             if (file.exists()) {
                 val jsonString = file.readText()
@@ -69,12 +79,12 @@ class AppStorageManager(context: Context) {
         }
     }
 
-    fun getJsonText(): String = if (file.exists()) file.readText() else "[]"
+    fun getJsonText(deckName: String): String = if (getFileForDeck(deckName).exists()) getFileForDeck(deckName).readText() else "[]"
 
-    fun importJson(jsonString: String): Boolean {
+    fun importJson(deckName: String, jsonString: String): Boolean {
         return try {
             val importedCards = json.decodeFromString<List<Flashcard>>(jsonString)
-            saveCards(importedCards)
+            saveCards(deckName, importedCards)
             true
         } catch (e: Exception) {
             false
@@ -102,16 +112,28 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun FlashCardApp(storageManager: AppStorageManager) {
     val context = LocalContext.current
+    val prefs = remember { context.getSharedPreferences("app_prefs", Context.MODE_PRIVATE) }
+    var selectedDeck by remember { mutableStateOf(prefs.getString("selected_deck", "cards") ?: "cards") }
+    var deckList by remember { mutableStateOf(storageManager.getDeckList()) }
     var currentMode by remember { mutableStateOf<String?>(null) }
-    var cards by remember { mutableStateOf(storageManager.loadCards()) }
+    var cards by remember { mutableStateOf(storageManager.loadCards(selectedDeck)) }
+    var newDeckName by remember { mutableStateOf("") }
+    var showMenu by remember { mutableStateOf(false) }
+    var showError by remember { mutableStateOf(false) }
+
+    LaunchedEffect(selectedDeck) {
+        cards = storageManager.loadCards(selectedDeck)
+        prefs.edit().putString("selected_deck", selectedDeck).apply()
+    }
 
     // インポート用のランチャー
     val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         uri?.let {
             context.contentResolver.openInputStream(it)?.use { stream ->
                 val jsonText = stream.bufferedReader().use { it.readText() }
-                if (storageManager.importJson(jsonText)) {
-                    cards = storageManager.loadCards()
+                if (storageManager.importJson(selectedDeck, jsonText)) {
+                    cards = storageManager.loadCards(selectedDeck)
+                    deckList = storageManager.getDeckList()
                     Toast.makeText(context, "Import Success!", Toast.LENGTH_SHORT).show()
                 } else {
                     Toast.makeText(context, "Invalid JSON Format", Toast.LENGTH_SHORT).show()
@@ -124,14 +146,14 @@ fun FlashCardApp(storageManager: AppStorageManager) {
     val exportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
         uri?.let {
             context.contentResolver.openOutputStream(it)?.use { stream ->
-                stream.write(storageManager.getJsonText().toByteArray())
+                stream.write(storageManager.getJsonText(selectedDeck).toByteArray())
                 Toast.makeText(context, "Export Success!", Toast.LENGTH_SHORT).show()
             }
         }
     }
 
     Scaffold(
-        topBar = { TopAppBar(title = { Text("Flash Card App") }) }
+        topBar = { TopAppBar(title = { Text("Flash Card App ($selectedDeck)") }) }
     ) { innerPadding ->
         Column(
             modifier = Modifier.fillMaxSize().padding(innerPadding).padding(16.dp)
@@ -142,6 +164,53 @@ fun FlashCardApp(storageManager: AppStorageManager) {
                     verticalArrangement = Arrangement.Center,
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
+                    Text(
+                        text = "使いかた：既存のデッキを選択するか、新しいデッキ名を入力して作成してください。その後、各モードを選択して学習を開始します。",
+                        fontSize = 14.sp,
+                        color = Color.Gray,
+                        modifier = Modifier.padding(bottom = 24.dp)
+                    )
+                    Box {
+                        Button(onClick = { showMenu = true }) {
+                            Text("Deck: $selectedDeck")
+                            Icon(Icons.Default.ArrowDropDown, null)
+                        }
+                        DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
+                            deckList.forEach { deck ->
+                                DropdownMenuItem(text = { Text(deck) }, onClick = {
+                                    selectedDeck = deck
+                                    showMenu = false
+                                })
+                            }
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        TextField(
+                            value = newDeckName,
+                            onValueChange = { newDeckName = it },
+                            placeholder = { Text("New Deck Name") },
+                            modifier = Modifier.width(150.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Button(onClick = {
+                            if (newDeckName.isNotBlank()) {
+                                val name = newDeckName.trim()
+                                storageManager.saveCards(name, emptyList())
+                                deckList = storageManager.getDeckList()
+                                selectedDeck = name
+                                newDeckName = ""
+                                showError = false
+                            } else {
+                                showError = true
+                            }
+                        }) { Text("Create") }
+                    }
+                    if (showError) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text("デッキ名を入力してください", color = Color.Red, fontSize = 12.sp)
+                    }
+                    Spacer(modifier = Modifier.height(24.dp))
                     Button(onClick = { currentMode = "register" }) { Text("Reg/Edit Mode") }
                     Spacer(modifier = Modifier.height(16.dp))
                     Button(onClick = { currentMode = "study" }) { Text("Flash Mode") }
@@ -163,19 +232,20 @@ fun FlashCardApp(storageManager: AppStorageManager) {
                             cards = cards,
                             onCardsUpdated = { updatedList ->
                                 cards = updatedList
-                                storageManager.saveCards(updatedList)
+                                storageManager.saveCards(selectedDeck, updatedList)
                             },
                             onImportClick = { importLauncher.launch("application/json") },
-                            onExportClick = { exportLauncher.launch("cards.json") }
+                            onExportClick = { exportLauncher.launch("$selectedDeck.json") }
                         )
                     }
                     "study" -> StudyScreen(
+                        deckName = selectedDeck,
                         cards = cards,
                         onCardUpdated = { index, isWrong ->
                             val newList = cards.toMutableList()
                             newList[index] = newList[index].copy(isWrong = isWrong)
                             cards = newList
-                            storageManager.saveCards(newList)
+                            storageManager.saveCards(selectedDeck, newList)
                         }
                     )
                     "game" -> Box(modifier = Modifier.fillMaxSize().weight(1f)) { GameScreen() }
@@ -195,12 +265,14 @@ fun RegistrationAndManagementScreen(
 ) {
     var word by remember { mutableStateOf("") }
     var answer by remember { mutableStateOf("") }
+    var memo by remember { mutableStateOf("") }
     var tagsInput by remember { mutableStateOf("") }
     var searchQuery by remember { mutableStateOf("") }
 
     val filteredCards = cards.filter {
         it.word.contains(searchQuery, ignoreCase = true) ||
                 it.answer.contains(searchQuery, ignoreCase = true) ||
+                it.memo.contains(searchQuery, ignoreCase = true) ||
                 it.tags.any { tag -> tag.contains(searchQuery, ignoreCase = true) }
     }
 
@@ -219,13 +291,14 @@ fun RegistrationAndManagementScreen(
                     Text("New Word Registration", fontSize = 18.sp, fontWeight = FontWeight.ExtraBold)
                     TextField(value = word, onValueChange = { word = it }, label = { Text("Word") }, modifier = Modifier.fillMaxWidth())
                     TextField(value = answer, onValueChange = { answer = it }, label = { Text("Answer") }, modifier = Modifier.fillMaxWidth())
+                    TextField(value = memo, onValueChange = { memo = it }, label = { Text("Memo") }, modifier = Modifier.fillMaxWidth())
                     TextField(value = tagsInput, onValueChange = { tagsInput = it }, label = { Text("Tags (comma separated)") }, modifier = Modifier.fillMaxWidth())
                     Button(
                         onClick = {
                             if (word.isNotBlank() && answer.isNotBlank()) {
                                 val tagList = tagsInput.split(",").map { it.trim() }.filter { it.isNotEmpty() }
-                                onCardsUpdated(cards + Flashcard(word, answer, tagList))
-                                word = ""; answer = ""; tagsInput = ""
+                                onCardsUpdated(cards + Flashcard(word, answer, tagList, memo = memo))
+                                word = ""; answer = ""; tagsInput = ""; memo = ""
                             }
                         },
                         modifier = Modifier.align(Alignment.End)
@@ -260,6 +333,12 @@ fun RegistrationAndManagementScreen(
         }
 
         items(filteredCards) { card ->
+            var isEditing by remember { mutableStateOf(false) }
+            var editedWord by remember { mutableStateOf(card.word) }
+            var editedAnswer by remember { mutableStateOf(card.answer) }
+            var editedMemo by remember { mutableStateOf(card.memo) }
+            var editedTags by remember { mutableStateOf(card.tags.joinToString(", ")) }
+
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 elevation = CardDefaults.cardElevation(defaultElevation = 2.dp), // 軽い影を追加
@@ -269,16 +348,43 @@ fun RegistrationAndManagementScreen(
                     color = if (card.isWrong) Color.Red else Color.LightGray
                 )
             ) {
-                Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                    if (card.isWrong) {
-                        Icon(Icons.Default.Warning, contentDescription = null, tint = Color.Red, modifier = Modifier.padding(end = 8.dp))
-                    }
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(card.word, fontWeight = FontWeight.Bold)
-                        Text(card.answer, color = Color.Gray)
-                    }
-                    IconButton(onClick = { onCardsUpdated(cards.filter { it != card }) }) {
-                        Icon(Icons.Default.Delete, "Delete", tint = Color.Red)
+                Column(modifier = Modifier.padding(16.dp)) {
+                    if (isEditing) {
+                        TextField(value = editedWord, onValueChange = { editedWord = it }, label = { Text("Word") }, modifier = Modifier.fillMaxWidth())
+                        TextField(value = editedAnswer, onValueChange = { editedAnswer = it }, label = { Text("Answer") }, modifier = Modifier.fillMaxWidth())
+                        TextField(value = editedMemo, onValueChange = { editedMemo = it }, label = { Text("Memo") }, modifier = Modifier.fillMaxWidth())
+                        TextField(value = editedTags, onValueChange = { editedTags = it }, label = { Text("Tags") }, modifier = Modifier.fillMaxWidth())
+                        Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
+                            Button(onClick = {
+                                val newTagList = editedTags.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+                                val newList = cards.map {
+                                    if (it == card) it.copy(word = editedWord, answer = editedAnswer, memo = editedMemo, tags = newTagList) else it
+                                }
+                                onCardsUpdated(newList)
+                                isEditing = false
+                            }) { Text("Save") }
+                            Spacer(modifier = Modifier.width(8.dp))
+                            TextButton(onClick = { isEditing = false }) { Text("Cancel") }
+                        }
+                    } else {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            if (card.isWrong) {
+                                Icon(Icons.Default.Warning, contentDescription = null, tint = Color.Red, modifier = Modifier.padding(end = 8.dp))
+                            }
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(card.word, fontWeight = FontWeight.Bold)
+                                Text(card.answer, color = Color.Gray)
+                                if (card.memo.isNotBlank()) {
+                                    Text("Memo: ${card.memo}", color = Color.DarkGray, fontSize = 14.sp)
+                                }
+                            }
+                            IconButton(onClick = { isEditing = true }) {
+                                Icon(Icons.Default.Edit, "Edit")
+                            }
+                            IconButton(onClick = { onCardsUpdated(cards.filter { it != card }) }) {
+                                Icon(Icons.Default.Delete, "Delete", tint = Color.Red)
+                            }
+                        }
                     }
                 }
             }
@@ -286,16 +392,20 @@ fun RegistrationAndManagementScreen(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun StudyScreen(cards: List<Flashcard>, onCardUpdated: (Int, Boolean) -> Unit) {
+fun StudyScreen(deckName: String, cards: List<Flashcard>, onCardUpdated: (Int, Boolean) -> Unit) {
     val context = LocalContext.current
 
     // SharedPreferencesの用意（進捗保存用）
     val prefs = remember { context.getSharedPreferences("app_prefs", Context.MODE_PRIVATE) }
 
+    val indexKey = "current_index_$deckName"
+    val filterKey = "show_only_wrong_$deckName"
+
     // 初期値をSharedPreferencesから読み込む（なければデフォルト値）
-    var showOnlyWrong by remember {
-        mutableStateOf(prefs.getBoolean("show_only_wrong", false))
+    var showOnlyWrong by remember(deckName) {
+        mutableStateOf(prefs.getBoolean(filterKey, false))
     }
 
     // チェックした問題のみに絞り込む
@@ -308,7 +418,7 @@ fun StudyScreen(cards: List<Flashcard>, onCardUpdated: (Int, Boolean) -> Unit) {
                 if (showOnlyWrong) {
                     Button(onClick = {
                         showOnlyWrong = false
-                        prefs.edit().putBoolean("show_only_wrong", false).apply()
+                        prefs.edit().putBoolean(filterKey, false).apply()
                     }) { Text("すべてのカードに戻る") }
                 }
             }
@@ -317,8 +427,8 @@ fun StudyScreen(cards: List<Flashcard>, onCardUpdated: (Int, Boolean) -> Unit) {
     }
 
     // 保存されていたインデックスを読み込み、現在のリスト範囲内に収める
-    val savedIndex = prefs.getInt("current_index", 0)
-    var currentIndex by remember {
+    val savedIndex = prefs.getInt(indexKey, 0)
+    var currentIndex by remember(deckName, showOnlyWrong) {
         mutableStateOf(savedIndex.coerceIn(0, displayCards.size - 1))
     }
 
@@ -346,7 +456,7 @@ fun StudyScreen(cards: List<Flashcard>, onCardUpdated: (Int, Boolean) -> Unit) {
                     currentIndex = 0
                     showAnswer = false
                     // フィルター状態を保存
-                    prefs.edit().putBoolean("show_only_wrong", showOnlyWrong).putInt("current_index", 0).apply()
+                    prefs.edit().putBoolean(filterKey, showOnlyWrong).putInt(indexKey, 0).apply()
                 },
                 label = { Text("Check Only", fontSize = 10.sp) }
             )
@@ -385,10 +495,19 @@ fun StudyScreen(cards: List<Flashcard>, onCardUpdated: (Int, Boolean) -> Unit) {
                     fontSize = fontSize,
                     color = if (showAnswer) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
                 )
+
+                if (showAnswer && currentCard.memo.isNotBlank()) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = currentCard.memo,
+                        fontSize = 14.sp,
+                        color = Color.Gray
+                    )
+                }
             }
         }
 
-        // 間違えた！ボタン（チェックのトグル）
+        // 間意がえた！ボタン（チェックのトグル）
         IconButton(
             onClick = {
                 val originalIndex = cards.indexOf(currentCard)
@@ -410,7 +529,7 @@ fun StudyScreen(cards: List<Flashcard>, onCardUpdated: (Int, Boolean) -> Unit) {
                 currentIndex = (safeIndex - 1 + displayCards.size) % displayCards.size
                 showAnswer = false
                 // 進捗を保存
-                prefs.edit().putInt("current_index", currentIndex).apply()
+                prefs.edit().putInt(indexKey, currentIndex).apply()
             }) { Text("Back") }
 
             Spacer(Modifier.width(16.dp))
@@ -419,7 +538,7 @@ fun StudyScreen(cards: List<Flashcard>, onCardUpdated: (Int, Boolean) -> Unit) {
                 currentIndex = (safeIndex + 1) % displayCards.size
                 showAnswer = false
                 // 進捗を保存
-                prefs.edit().putInt("current_index", currentIndex).apply()
+                prefs.edit().putInt(indexKey, currentIndex).apply()
             }) { Text("Next") }
         }
     }
