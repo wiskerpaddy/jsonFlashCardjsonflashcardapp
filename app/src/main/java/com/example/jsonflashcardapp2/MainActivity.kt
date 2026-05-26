@@ -33,6 +33,8 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import java.io.File
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 
 // 1. データモデル
 @Serializable
@@ -286,9 +288,15 @@ fun RegistrationAndManagementScreen(
 
 @Composable
 fun StudyScreen(cards: List<Flashcard>, onCardUpdated: (Int, Boolean) -> Unit) {
-    var currentIndex by remember { mutableStateOf(0) }
-    var showAnswer by remember { mutableStateOf(false) }
-    var showOnlyWrong by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+
+    // SharedPreferencesの用意（進捗保存用）
+    val prefs = remember { context.getSharedPreferences("app_prefs", Context.MODE_PRIVATE) }
+
+    // 初期値をSharedPreferencesから読み込む（なければデフォルト値）
+    var showOnlyWrong by remember {
+        mutableStateOf(prefs.getBoolean("show_only_wrong", false))
+    }
 
     // チェックした問題のみに絞り込む
     val displayCards = if (showOnlyWrong) cards.filter { it.isWrong } else cards
@@ -298,16 +306,33 @@ fun StudyScreen(cards: List<Flashcard>, onCardUpdated: (Int, Boolean) -> Unit) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 Text(if (showOnlyWrong) "Check済みカードはありません" else "カードがありません")
                 if (showOnlyWrong) {
-                    Button(onClick = { showOnlyWrong = false }) { Text("すべてのカードに戻る") }
+                    Button(onClick = {
+                        showOnlyWrong = false
+                        prefs.edit().putBoolean("show_only_wrong", false).apply()
+                    }) { Text("すべてのカードに戻る") }
                 }
             }
         }
         return
     }
 
+    // 保存されていたインデックスを読み込み、現在のリスト範囲内に収める
+    val savedIndex = prefs.getInt("current_index", 0)
+    var currentIndex by remember {
+        mutableStateOf(savedIndex.coerceIn(0, displayCards.size - 1))
+    }
+
+    var showAnswer by remember { mutableStateOf(false) }
+
     // インデックスが範囲外にならないよう調整
     val safeIndex = currentIndex.coerceIn(0, displayCards.size - 1)
     val currentCard = displayCards[safeIndex]
+
+    // スクリプトの見切れ対策：カードが切り替わるたびにスクロール位置を最上部にリセット
+    val scrollState = rememberScrollState()
+    LaunchedEffect(safeIndex, showAnswer) {
+        scrollState.scrollTo(0)
+    }
 
     Column(Modifier.fillMaxSize(), Arrangement.Center, Alignment.CenterHorizontally) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -316,7 +341,13 @@ fun StudyScreen(cards: List<Flashcard>, onCardUpdated: (Int, Boolean) -> Unit) {
             // フィルタ切り替えスイッチ
             FilterChip(
                 selected = showOnlyWrong,
-                onClick = { showOnlyWrong = !showOnlyWrong; currentIndex = 0 },
+                onClick = {
+                    showOnlyWrong = !showOnlyWrong
+                    currentIndex = 0
+                    showAnswer = false
+                    // フィルター状態を保存
+                    prefs.edit().putBoolean("show_only_wrong", showOnlyWrong).putInt("current_index", 0).apply()
+                },
                 label = { Text("Check Only", fontSize = 10.sp) }
             )
         }
@@ -325,11 +356,9 @@ fun StudyScreen(cards: List<Flashcard>, onCardUpdated: (Int, Boolean) -> Unit) {
             onClick = { showAnswer = !showAnswer },
             modifier = Modifier
                 .fillMaxWidth()
-                .height(200.dp)
+                .height(250.dp) // 長文に対応するため少し高さを広げました
                 .padding(16.dp),
-            // 影を追加して浮き上がらせる
             elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
-            // 枠線を追加（通常時はライトグレー、チェック時は薄い赤など）
             border = BorderStroke(
                 width = 1.dp,
                 color = if (currentCard.isWrong) Color.Red else Color.LightGray
@@ -338,15 +367,30 @@ fun StudyScreen(cards: List<Flashcard>, onCardUpdated: (Int, Boolean) -> Unit) {
                 containerColor = if (currentCard.isWrong) Color(0xFFFFEBEE) else MaterialTheme.colorScheme.surface
             )
         ) {
-            Box(Modifier.fillMaxSize(), Alignment.Center) {
-                Text(if (showAnswer) currentCard.answer else currentCard.word, fontSize = 24.sp)
+            // Boxから、スクロール可能なColumnに変更して見切れを完全に防ぐ
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(16.dp)
+                    .verticalScroll(scrollState), // ← ここで縦スクロールを有効化
+                verticalArrangement = Arrangement.Center,
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                val textToShow = if (showAnswer) currentCard.answer else currentCard.word
+                // 長文の時は自動的に少し文字サイズを下げる
+                val fontSize = if (textToShow.length > 30) 18.sp else 22.sp
+
+                Text(
+                    text = textToShow,
+                    fontSize = fontSize,
+                    color = if (showAnswer) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                )
             }
         }
 
         // 間違えた！ボタン（チェックのトグル）
         IconButton(
             onClick = {
-                // 元のリストにおけるこのカードのインデックスを探して更新
                 val originalIndex = cards.indexOf(currentCard)
                 onCardUpdated(originalIndex, !currentCard.isWrong)
             }
@@ -362,9 +406,21 @@ fun StudyScreen(cards: List<Flashcard>, onCardUpdated: (Int, Boolean) -> Unit) {
         Spacer(Modifier.height(16.dp))
 
         Row {
-            Button(onClick = { currentIndex = (safeIndex - 1 + displayCards.size) % displayCards.size; showAnswer = false }) { Text("Back") }
+            Button(onClick = {
+                currentIndex = (safeIndex - 1 + displayCards.size) % displayCards.size
+                showAnswer = false
+                // 進捗を保存
+                prefs.edit().putInt("current_index", currentIndex).apply()
+            }) { Text("Back") }
+
             Spacer(Modifier.width(16.dp))
-            Button(onClick = { currentIndex = (safeIndex + 1) % displayCards.size; showAnswer = false }) { Text("Next") }
+
+            Button(onClick = {
+                currentIndex = (safeIndex + 1) % displayCards.size
+                showAnswer = false
+                // 進捗を保存
+                prefs.edit().putInt("current_index", currentIndex).apply()
+            }) { Text("Next") }
         }
     }
 }
