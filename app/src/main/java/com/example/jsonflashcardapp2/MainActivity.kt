@@ -40,6 +40,11 @@ import android.speech.tts.UtteranceProgressListener
 import java.util.Locale
 import kotlinx.coroutines.launch
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.material3.OutlinedTextFieldDefaults
+import android.provider.OpenableColumns
+import androidx.activity.compose.BackHandler
 // 1. データモデル
 @Serializable
 data class Flashcard(
@@ -145,20 +150,38 @@ fun FlashCardApp(
     var showError by remember { mutableStateOf(false) }
     var showHelpDialog by remember { mutableStateOf(false) }
 
+    // ★ ここに追加：Android標準の「戻る」アクションをフックする ★
+    BackHandler(enabled = currentMode != null) {
+        // currentModeがnull以外（＝何かの画面を開いている）の時に「戻る」が押されたら、
+        // アプリを終了せずにメインメニュー（null）に戻す
+        currentMode = null
+
+        // （任意）エディタ等で変更があった場合に備えて最新データを再読み込みしておく
+        cards = storageManager.loadCards(selectedDeck)
+    }
+    
     LaunchedEffect(selectedDeck) {
         cards = storageManager.loadCards(selectedDeck)
         prefs.edit().putString("selected_deck", selectedDeck).apply()
     }
 
-    // インポート用のランチャー
+    // 修正後の importLauncher
     val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         uri?.let {
+            // ① Uriからファイル名（拡張子なし）を取得して新しいデッキ名とする
+            val importedDeckName = getDeckNameFromUri(context, it)
+
             context.contentResolver.openInputStream(it)?.use { stream ->
-                val jsonText = stream.bufferedReader().use { it.readText() }
-                if (storageManager.importJson(selectedDeck, jsonText)) {
-                    cards = storageManager.loadCards(selectedDeck)
+                val jsonText = stream.bufferedReader().use { reader -> reader.readText() }
+
+                // ② 新しいデッキ名でインポート（保存）を行う
+                if (storageManager.importJson(importedDeckName, jsonText)) {
+                    // ③ 成功したら、現在選択中のデッキをインポートしたものに切り替える
+                    selectedDeck = importedDeckName
+                    cards = storageManager.loadCards(importedDeckName)
                     deckList = storageManager.getDeckList()
-                    Toast.makeText(context, "Import Success!", Toast.LENGTH_SHORT).show()
+
+                    Toast.makeText(context, "Imported as: $importedDeckName", Toast.LENGTH_SHORT).show()
                 } else {
                     Toast.makeText(context, "Invalid JSON Format", Toast.LENGTH_SHORT).show()
                 }
@@ -315,6 +338,17 @@ fun FlashCardApp(
                             colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.tertiary)
                         ) { Text("Audio Player Mode") }
 
+                        // ★ ここにエディタ起動ボタンを追加 ★
+                        OutlinedButton(
+                            onClick = { currentMode = "json_editor" },
+                            modifier = Modifier.fillMaxWidth(0.8f).height(50.dp),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.Gray)
+                        ) {
+                            Icon(Icons.Default.Edit, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Raw JSON Editor")
+                        }
+
                         OutlinedButton(
                             onClick = { currentMode = "game" },
                             modifier = Modifier.fillMaxWidth(0.8f).height(50.dp),
@@ -352,7 +386,17 @@ fun FlashCardApp(
                         }
                     )
                     "audio" -> AudioPlayerScreen(deckName = selectedDeck, cards = cards, isDarkMode = isDarkMode) // 【追加】
-                    "game" -> Box(modifier = Modifier.fillMaxSize().weight(1f)) { GameScreen()
+                    "game" -> Box(modifier = Modifier.fillMaxSize().weight(1f)) { GameScreen() }
+                    "json_editor" -> {
+                        JsonEditorScreen(
+                            deckName = selectedDeck,
+                            storageManager = storageManager,
+                            onBack = {
+                                currentMode = null
+                                // 編集後にリストを最新のJSONから再読み込みする
+                                cards = storageManager.loadCards(selectedDeck)
+                            }
+                        )
                     }
                 }
             }
@@ -853,4 +897,98 @@ fun AudioPlayerScreen(deckName: String, cards: List<Flashcard>, isDarkMode: Bool
             modifier = Modifier.fillMaxWidth(0.8f)
         )
     }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun JsonEditorScreen(
+    deckName: String,
+    storageManager: AppStorageManager,
+    onBack: () -> Unit
+) {
+    val context = LocalContext.current
+    var jsonText by remember { mutableStateOf(storageManager.getJsonText(deckName)) }
+    var errorMessage by remember { mutableStateOf<String?>(null) }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "Editing: $deckName.json",
+                fontWeight = FontWeight.Bold,
+                fontSize = 18.sp
+            )
+            Row {
+                TextButton(onClick = onBack) {
+                    Text("Cancel")
+                }
+                Button(onClick = {
+                    // 保存前にJSONの構文チェックを行う
+                    try {
+                        val format = Json { ignoreUnknownKeys = true }
+                        val parsedCards = format.decodeFromString<List<Flashcard>>(jsonText)
+                        storageManager.saveCards(deckName, parsedCards)
+                        Toast.makeText(context, "Saved Successfully!", Toast.LENGTH_SHORT).show()
+                        onBack() // 成功したら戻る
+                    } catch (e: Exception) {
+                        errorMessage = "JSON Error: ${e.localizedMessage}"
+                    }
+                }) {
+                    Text("Save")
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        if (errorMessage != null) {
+            Text(
+                text = errorMessage!!,
+                color = MaterialTheme.colorScheme.error,
+                fontSize = 12.sp,
+                modifier = Modifier.padding(bottom = 8.dp)
+            )
+        }
+
+        OutlinedTextField(
+            value = jsonText,
+            onValueChange = {
+                jsonText = it
+                errorMessage = null // 編集したらエラーを一旦消す
+            },
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f), // 残りの画面全体を使う
+            textStyle = TextStyle(
+                fontFamily = FontFamily.Monospace, // エディタっぽく等幅フォントに
+                fontSize = 14.sp
+            ),
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
+                unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
+            )
+        )
+    }
+}
+
+// Uriからファイル名を取得し、拡張子(.json)を除外する関数
+fun getDeckNameFromUri(context: Context, uri: Uri): String {
+    var fileName = "imported_deck" // 取得できなかった場合のデフォルト名
+    context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+        if (cursor.moveToFirst()) {
+            val index = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+            if (index >= 0) {
+                fileName = cursor.getString(index)
+            }
+        }
+    }
+    // "my_deck.json" -> "my_deck" のように拡張子をカット
+    return fileName.substringBeforeLast(".")
 }
