@@ -45,13 +45,15 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import android.provider.OpenableColumns
 import androidx.activity.compose.BackHandler
+import androidx.compose.ui.text.style.TextOverflow
+
 // 1. データモデル
 @Serializable
 data class Flashcard(
     val word: String,
     val answer: String,
     val tags: List<String> = emptyList(),
-    val isWrong: Boolean = false, // ← 追加
+    val isWrong: Boolean = false,
     val memo: String = ""
 )
 
@@ -98,6 +100,12 @@ class AppStorageManager(private val context: Context) {
         } catch (e: Exception) {
             false
         }
+    }
+
+    // ④ デッキ削除ロジックの追加
+    fun deleteDeck(deckName: String): Boolean {
+        val file = getFileForDeck(deckName)
+        return if (file.exists()) file.delete() else false
     }
 }
 
@@ -149,38 +157,27 @@ fun FlashCardApp(
     var showMenu by remember { mutableStateOf(false) }
     var showError by remember { mutableStateOf(false) }
     var showHelpDialog by remember { mutableStateOf(false) }
+    var showDeleteConfirmation by remember { mutableStateOf(false) } // ④ 削除ダイアログ用
 
-    // ★ ここに追加：Android標準の「戻る」アクションをフックする ★
     BackHandler(enabled = currentMode != null) {
-        // currentModeがnull以外（＝何かの画面を開いている）の時に「戻る」が押されたら、
-        // アプリを終了せずにメインメニュー（null）に戻す
         currentMode = null
-
-        // （任意）エディタ等で変更があった場合に備えて最新データを再読み込みしておく
         cards = storageManager.loadCards(selectedDeck)
     }
-    
+
     LaunchedEffect(selectedDeck) {
         cards = storageManager.loadCards(selectedDeck)
         prefs.edit().putString("selected_deck", selectedDeck).apply()
     }
 
-    // 修正後の importLauncher
     val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         uri?.let {
-            // ① Uriからファイル名（拡張子なし）を取得して新しいデッキ名とする
             val importedDeckName = getDeckNameFromUri(context, it)
-
             context.contentResolver.openInputStream(it)?.use { stream ->
                 val jsonText = stream.bufferedReader().use { reader -> reader.readText() }
-
-                // ② 新しいデッキ名でインポート（保存）を行う
                 if (storageManager.importJson(importedDeckName, jsonText)) {
-                    // ③ 成功したら、現在選択中のデッキをインポートしたものに切り替える
                     selectedDeck = importedDeckName
                     cards = storageManager.loadCards(importedDeckName)
                     deckList = storageManager.getDeckList()
-
                     Toast.makeText(context, "Imported as: $importedDeckName", Toast.LENGTH_SHORT).show()
                 } else {
                     Toast.makeText(context, "Invalid JSON Format", Toast.LENGTH_SHORT).show()
@@ -189,7 +186,6 @@ fun FlashCardApp(
         }
     }
 
-    // エクスポート用のランチャー
     val exportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
         uri?.let {
             context.contentResolver.openOutputStream(it)?.use { stream ->
@@ -205,9 +201,7 @@ fun FlashCardApp(
                 title = { Text("                 Flash Card App") },
                 actions = {
                     IconButton(onClick = { onDarkModeChanged(!isDarkMode) }) {
-                        IconButton(onClick = { onDarkModeChanged(!isDarkMode) }) {
-                            Text(if (isDarkMode) "☀️" else "🌙", fontSize = 20.sp)
-                        }
+                        Text(if (isDarkMode) "☀️" else "🌙", fontSize = 20.sp)
                     }
                     IconButton(onClick = { showHelpDialog = true }) {
                         Icon(Icons.Default.Info, contentDescription = "Help")
@@ -225,14 +219,6 @@ fun FlashCardApp(
                     verticalArrangement = Arrangement.Center,
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-//                    Text(
-//                        text = "使いかた：既存のデッキを選択するか、新しいデッキ名を入力して作成してください。その後、各モードを選択して学習を開始します。",
-//                        fontSize = 14.sp,
-//                        color = Color.Gray,
-//                        modifier = Modifier.padding(bottom = 24.dp)
-//                    )
-
-                    // デッキ管理エリア
                     Card(
                         modifier = Modifier.fillMaxWidth(),
                         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f))
@@ -244,27 +230,54 @@ fun FlashCardApp(
                         ) {
                             Text("デッキ管理", fontWeight = FontWeight.Bold, fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
 
-                            // 横幅を統一したデッキ選択
-                            Box(modifier = Modifier.fillMaxWidth(0.85f), contentAlignment = Alignment.Center) {
-                                Button(
-                                    onClick = { showMenu = true },
-                                    modifier = Modifier.fillMaxWidth(),
-                                    shape = CircleShape
-                                ) {
-                                    Text("Deck: $selectedDeck")
-                                    Icon(Icons.Default.ArrowDropDown, null)
-                                }
-                                DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
-                                    deckList.forEach { deck ->
-                                        DropdownMenuItem(text = { Text(deck) }, onClick = {
-                                            selectedDeck = deck
-                                            showMenu = false
-                                        })
+                            // ④ 横幅を維持しつつ、削除ボタンを配置したRow構造
+                            Row(
+                                modifier = Modifier.fillMaxWidth(0.85f),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.Center) {
+                                    Button(
+                                        onClick = { showMenu = true },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        shape = CircleShape
+                                    ) {
+                                        // ② 長いデッキ名対策：1行に収めてあふれたら「...」にする
+                                        Text(
+                                            text = "Deck: $selectedDeck",
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            modifier = Modifier.weight(1f, fill = false),
+                                            fontSize = 14.sp
+                                        )
+                                        Icon(Icons.Default.ArrowDropDown, null)
                                     }
+                                    DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
+                                        deckList.forEach { deck ->
+                                            DropdownMenuItem(
+                                                text = {
+                                                    Text(
+                                                        text = deck,
+                                                        maxLines = 1,
+                                                        overflow = TextOverflow.Ellipsis
+                                                    )
+                                                },
+                                                onClick = {
+                                                    selectedDeck = deck
+                                                    showMenu = false
+                                                }
+                                            )
+                                        }
+                                    }
+                                }
+                                Spacer(modifier = Modifier.width(8.dp))
+                                // デッキ削除ボタン
+                                IconButton(
+                                    onClick = { showDeleteConfirmation = true }
+                                ) {
+                                    Icon(Icons.Default.Delete, contentDescription = "Delete Deck", tint = Color.Red)
                                 }
                             }
 
-                            // 高さとカプセル形状を完全に同期させ、文字視認性を確保したエリア
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.Center,
@@ -301,7 +314,6 @@ fun FlashCardApp(
                                 ) { Text("Create") }
                             }
 
-                            // エラーテキストをRowの外側に配置してテキスト潰れと位置ズレを防止
                             Box(
                                 modifier = Modifier.fillMaxWidth(0.85f).height(16.dp),
                                 contentAlignment = Alignment.CenterStart
@@ -338,7 +350,6 @@ fun FlashCardApp(
                             colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.tertiary)
                         ) { Text("Audio Player Mode") }
 
-                        // ★ ここにエディタ起動ボタンを追加 ★
                         OutlinedButton(
                             onClick = { currentMode = "json_editor" },
                             modifier = Modifier.fillMaxWidth(0.8f).height(50.dp),
@@ -357,10 +368,12 @@ fun FlashCardApp(
                     }
                 }
             } else {
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Button(onClick = { currentMode = null }) { Text("Return Menu") }
+                if (currentMode != "json_editor") { // JSONエディタ側で独自の戻る/保存を制御するため除外
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Button(onClick = { currentMode = null }) { Text("Return Menu") }
+                    }
+                    Spacer(modifier = Modifier.height(16.dp))
                 }
-                Spacer(modifier = Modifier.height(16.dp))
 
                 when (currentMode) {
                     "register" -> {
@@ -385,7 +398,7 @@ fun FlashCardApp(
                             storageManager.saveCards(selectedDeck, newList)
                         }
                     )
-                    "audio" -> AudioPlayerScreen(deckName = selectedDeck, cards = cards, isDarkMode = isDarkMode) // 【追加】
+                    "audio" -> AudioPlayerScreen(deckName = selectedDeck, cards = cards, isDarkMode = isDarkMode)
                     "game" -> Box(modifier = Modifier.fillMaxSize().weight(1f)) { GameScreen() }
                     "json_editor" -> {
                         JsonEditorScreen(
@@ -393,7 +406,6 @@ fun FlashCardApp(
                             storageManager = storageManager,
                             onBack = {
                                 currentMode = null
-                                // 編集後にリストを最新のJSONから再読み込みする
                                 cards = storageManager.loadCards(selectedDeck)
                             }
                         )
@@ -403,11 +415,41 @@ fun FlashCardApp(
         }
     }
 
+    // ④ デッキ削除確認ダイアログ
+    if (showDeleteConfirmation) {
+        AlertDialog(
+            onDismissRequest = { showDeleteConfirmation = false },
+            title = { Text("デッキの削除") },
+            text = { Text("デッキ「$selectedDeck」を完全に削除しますか？この操作は取り消せません。") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        storageManager.deleteDeck(selectedDeck)
+                        deckList = storageManager.getDeckList()
+                        // リストが空になったら自動でデフォルトの「cards」を作り直して選択
+                        selectedDeck = deckList.firstOrNull() ?: "cards"
+                        if (deckList.isEmpty()) {
+                            storageManager.saveCards("cards", emptyList())
+                            deckList = storageManager.getDeckList()
+                            selectedDeck = "cards"
+                        }
+                        cards = storageManager.loadCards(selectedDeck)
+                        showDeleteConfirmation = false
+                        Toast.makeText(context, "デッキを削除しました", Toast.LENGTH_SHORT).show()
+                    }
+                ) { Text("削除", color = Color.Red) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteConfirmation = false }) { Text("キャンセル") }
+            }
+        )
+    }
+
     if (showHelpDialog) {
         AlertDialog(
             onDismissRequest = { showHelpDialog = false },
             title = { Text("使いかた") },
-            text = { Text("既存的デッキを選択するか、新しいデッキ名を入力して作成してください。その後、各モードを選択して学習を開始します。") },
+            text = { Text("既存のデッキを選択するか、新しいデッキ名を入力して作成してください。その後、各モードを選択して学習を開始します。") },
             confirmButton = {
                 TextButton(onClick = { showHelpDialog = false }) { Text("閉じる") }
             }
@@ -481,11 +523,11 @@ fun RegistrationAndManagementScreen(
                 Spacer(modifier = Modifier.height(8.dp))
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(onClick = onImportClick, modifier = Modifier.weight(1f)) {
-                        Icon(Icons.Default.Add, null) // FileDownload の代わり
+                        Icon(Icons.Default.Add, null)
                         Text("Import", fontSize = 12.sp)
                     }
                     Button(onClick = onExportClick, modifier = Modifier.weight(1f)) {
-                        Icon(Icons.Default.Share, null) // FileUpload の代わり
+                        Icon(Icons.Default.Share, null)
                         Text("Export", fontSize = 12.sp)
                     }
                 }
@@ -501,8 +543,7 @@ fun RegistrationAndManagementScreen(
 
             Card(
                 modifier = Modifier.fillMaxWidth(),
-                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp), // 軽い影を追加
-                // ここを修正：!card.isWrong の時も LightGray の枠線を引く
+                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
                 border = BorderStroke(
                     width = if (card.isWrong) 2.dp else 1.dp,
                     color = if (card.isWrong) Color.Red else Color.LightGray
@@ -556,19 +597,14 @@ fun RegistrationAndManagementScreen(
 @Composable
 fun StudyScreen(deckName: String, cards: List<Flashcard>, isDarkMode: Boolean, onCardUpdated: (Int, Boolean) -> Unit) {
     val context = LocalContext.current
-
-    // SharedPreferencesの用意（進捗保存用）
     val prefs = remember { context.getSharedPreferences("app_prefs", Context.MODE_PRIVATE) }
-
     val indexKey = "current_index_$deckName"
     val filterKey = "show_only_wrong_$deckName"
 
-    // 初期値をSharedPreferencesから読み込む（なければデフォルト値）
     var showOnlyWrong by remember(deckName) {
         mutableStateOf(prefs.getBoolean(filterKey, false))
     }
 
-    // チェックした問題のみに絞り込む
     val displayCards = if (showOnlyWrong) cards.filter { it.isWrong } else cards
 
     if (displayCards.isEmpty()) {
@@ -586,36 +622,30 @@ fun StudyScreen(deckName: String, cards: List<Flashcard>, isDarkMode: Boolean, o
         return
     }
 
-    // 保存されていたインデックスを読み込み、現在のリスト範囲内に収める
     val savedIndex = prefs.getInt(indexKey, 0)
     var currentIndex by remember(deckName, showOnlyWrong) {
         mutableStateOf(savedIndex.coerceIn(0, displayCards.size - 1))
     }
 
     var showAnswer by remember { mutableStateOf(false) }
-
-    // インデックスが範囲外にならないよう調整
     val safeIndex = currentIndex.coerceIn(0, displayCards.size - 1)
     val currentCard = displayCards[safeIndex]
 
-    // スクリプトの見切れ対策：カードが切り替わるたびにスクロール位置を最上部にリセット
-    val scrollState = rememberScrollState()
+    val studyScrollState = rememberScrollState()
     LaunchedEffect(safeIndex, showAnswer) {
-        scrollState.scrollTo(0)
+        studyScrollState.scrollTo(0)
     }
 
     Column(Modifier.fillMaxSize(), Arrangement.Center, Alignment.CenterHorizontally) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("Card ${safeIndex + 1} / ${displayCards.size}")
             Spacer(Modifier.width(8.dp))
-            // フィルタ切り替えスイッチ
             FilterChip(
                 selected = showOnlyWrong,
                 onClick = {
                     showOnlyWrong = !showOnlyWrong
                     currentIndex = 0
                     showAnswer = false
-                    // フィルター状態を保存
                     prefs.edit().putBoolean(filterKey, showOnlyWrong).putInt(indexKey, 0).apply()
                 },
                 label = { Text("Check Only", fontSize = 10.sp) }
@@ -626,7 +656,7 @@ fun StudyScreen(deckName: String, cards: List<Flashcard>, isDarkMode: Boolean, o
             onClick = { showAnswer = !showAnswer },
             modifier = Modifier
                 .fillMaxWidth()
-                .height(250.dp) // 長文に対応するため少し高さを広げました
+                .height(250.dp)
                 .padding(16.dp),
             elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
             border = BorderStroke(
@@ -639,17 +669,15 @@ fun StudyScreen(deckName: String, cards: List<Flashcard>, isDarkMode: Boolean, o
                 } else MaterialTheme.colorScheme.surface
             )
         ) {
-            // Boxから、スクロール可能なColumnに変更して見切れを完全に防ぐ
             Column(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(16.dp)
-                    .verticalScroll(scrollState), // ← ここで縦スクロールを有効化
+                    .verticalScroll(studyScrollState),
                 verticalArrangement = Arrangement.Center,
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 val textToShow = if (showAnswer) currentCard.answer else currentCard.word
-                // 長文の時は自動的に少し文字サイズを下げる
                 val fontSize = if (textToShow.length > 30) 18.sp else 22.sp
 
                 Text(
@@ -669,7 +697,6 @@ fun StudyScreen(deckName: String, cards: List<Flashcard>, isDarkMode: Boolean, o
             }
         }
 
-        // 間意がえた！ボタン（チェックのトグル）
         IconButton(
             onClick = {
                 val originalIndex = cards.indexOf(currentCard)
@@ -690,7 +717,6 @@ fun StudyScreen(deckName: String, cards: List<Flashcard>, isDarkMode: Boolean, o
             Button(onClick = {
                 currentIndex = (safeIndex - 1 + displayCards.size) % displayCards.size
                 showAnswer = false
-                // 進捗を保存
                 prefs.edit().putInt(indexKey, currentIndex).apply()
             }) { Text("Back") }
 
@@ -699,7 +725,6 @@ fun StudyScreen(deckName: String, cards: List<Flashcard>, isDarkMode: Boolean, o
             Button(onClick = {
                 currentIndex = (safeIndex + 1) % displayCards.size
                 showAnswer = false
-                // 進捗を保存
                 prefs.edit().putInt(indexKey, currentIndex).apply()
             }) { Text("Next") }
         }
@@ -720,15 +745,33 @@ fun GameScreen() {
 @Composable
 fun AudioPlayerScreen(deckName: String, cards: List<Flashcard>, isDarkMode: Boolean) {
     val context = LocalContext.current
-    val coroutineScope = rememberCoroutineScope() // ←【追加】バックグラウンド処理を安全にUIに繋ぐためのスコープ
+    val coroutineScope = rememberCoroutineScope()
+
+    // ① 音声モード進捗保持用の SharedPreferences 設定
+    val prefs = remember { context.getSharedPreferences("app_prefs", Context.MODE_PRIVATE) }
+    val audioIndexKey = "audio_index_$deckName"
 
     var tts by remember { mutableStateOf<TextToSpeech?>(null) }
     var isPlaying by remember { mutableStateOf(false) }
-    var currentIndex by remember { mutableStateOf(0) }
-    var currentDisplay by remember { mutableStateOf("word") } // "word" または "ans"
-    var pauseSeconds by remember { mutableStateOf(2f) }
 
-    // 【変更】1枚のカードだけを再生する関数
+    // ① 保存されていた再生位置の読み込み
+    val savedIndex = prefs.getInt(audioIndexKey, 0)
+    var currentIndex by remember(deckName) {
+        mutableStateOf(savedIndex.coerceIn(0, cards.size - 1))
+    }
+
+    var currentDisplay by remember { mutableStateOf("word") }
+    var pauseSeconds by remember { mutableStateOf(2f) }
+    var speechRate by remember { mutableStateOf(1.0f) } // ③ 読み上げ速度用の状態を追加
+
+    // ② 見切れ対策用のスクロール状態
+    val audioScrollState = rememberScrollState()
+
+    // カードが切り替わった時、または表示（Word/Ans）が変わった時に最上部へスクロールリセット
+    LaunchedEffect(currentIndex, currentDisplay) {
+        audioScrollState.scrollTo(0)
+    }
+
     fun playCurrentCard() {
         if (currentIndex >= cards.size || !isPlaying) {
             isPlaying = false
@@ -736,32 +779,29 @@ fun AudioPlayerScreen(deckName: String, cards: List<Flashcard>, isDarkMode: Bool
         }
         val card = cards[currentIndex]
 
-        // 1. 問題の読み上げ (QUEUE_FLUSHで前の予約を破棄して即再生)
+        // ③ 読み上げ実行の直前に速度を設定する
+        tts?.setSpeechRate(speechRate)
+
+        // 1. 問題の読み上げ
         tts?.language = Locale.US
         tts?.speak(card.word, TextToSpeech.QUEUE_FLUSH, null, "word_$currentIndex")
 
-        // 2. スライダーで設定した秒数のポーズ
+        // 2. ポーズ
         tts?.playSilentUtterance((pauseSeconds * 1000).toLong(), TextToSpeech.QUEUE_ADD, "pause_$currentIndex")
 
         // 3. 答えの読み上げ
         tts?.language = Locale.JAPAN
         tts?.speak(card.answer, TextToSpeech.QUEUE_ADD, null, "ans_$currentIndex")
 
-        // 4. 次のカードへ移る前の短い待機 (この再生完了をトリガーに次へ進む)
+        // 4. 次へ進む待機
         tts?.playSilentUtterance(1500, TextToSpeech.QUEUE_ADD, "next_$currentIndex")
     }
 
-    // TTSの初期化とリスナー設定
     DisposableEffect(context) {
-        val textToSpeech = TextToSpeech(context) { status ->
-            if (status == TextToSpeech.SUCCESS) {
-                // 初期化成功
-            }
-        }
+        val textToSpeech = TextToSpeech(context) { status -> }
 
         textToSpeech.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
             override fun onStart(utteranceId: String?) {
-                // 【変更】coroutineScope.launchでメインスレッドに戻して安全にUIを更新
                 coroutineScope.launch {
                     utteranceId?.let {
                         if (it.startsWith("word_")) currentDisplay = "word"
@@ -771,14 +811,15 @@ fun AudioPlayerScreen(deckName: String, cards: List<Flashcard>, isDarkMode: Bool
             }
 
             override fun onDone(utteranceId: String?) {
-                // 【変更】一つの処理が終わったら、メインスレッド経由で次のカードを再生させる
                 coroutineScope.launch {
                     if (utteranceId?.startsWith("next_") == true && isPlaying) {
                         if (currentIndex < cards.size - 1) {
                             currentIndex++
-                            playCurrentCard() // 次のカードへループ
+                            // ① 自動ループ時にも進捗インデックスを永続化
+                            prefs.edit().putInt(audioIndexKey, currentIndex).apply()
+                            playCurrentCard()
                         } else {
-                            isPlaying = false // 最後まで完了
+                            isPlaying = false
                         }
                     }
                 }
@@ -822,14 +863,22 @@ fun AudioPlayerScreen(deckName: String, cards: List<Flashcard>, isDarkMode: Bool
                 containerColor = if (isDarkMode) MaterialTheme.colorScheme.surfaceVariant else Color.White
             )
         ) {
+            // ② 縦スクロール（verticalScroll）を付与して見切れを完全に防ぐ
             Column(
-                modifier = Modifier.fillMaxSize().padding(16.dp),
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(16.dp)
+                    .verticalScroll(audioScrollState),
                 verticalArrangement = Arrangement.Center,
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
+                // 長文に対応した文字サイズ調整
+                val wordFontSize = if (currentCard.word.length > 30) 20.sp else 28.sp
+                val answerFontSize = if (currentCard.answer.length > 30) 18.sp else 24.sp
+
                 Text(
                     text = currentCard.word,
-                    fontSize = 28.sp,
+                    fontSize = wordFontSize,
                     fontWeight = FontWeight.ExtraBold,
                     color = if (currentDisplay == "word") MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
                 )
@@ -839,14 +888,14 @@ fun AudioPlayerScreen(deckName: String, cards: List<Flashcard>, isDarkMode: Bool
                 if (currentDisplay == "ans") {
                     Text(
                         text = currentCard.answer,
-                        fontSize = 24.sp,
+                        fontSize = answerFontSize,
                         color = MaterialTheme.colorScheme.secondary
                     )
                 }
             }
         }
 
-        Spacer(Modifier.height(32.dp))
+        Spacer(Modifier.height(24.dp))
 
         // コントロールパネル
         Row(
@@ -855,6 +904,8 @@ fun AudioPlayerScreen(deckName: String, cards: List<Flashcard>, isDarkMode: Bool
         ) {
             Button(onClick = {
                 currentIndex = maxOf(0, currentIndex - 1)
+                // ① ボタン押下時に再生位置を保存
+                prefs.edit().putInt(audioIndexKey, currentIndex).apply()
                 if (isPlaying) { playCurrentCard() } else { currentDisplay = "word" }
             }) { Text("Prev") }
 
@@ -878,11 +929,13 @@ fun AudioPlayerScreen(deckName: String, cards: List<Flashcard>, isDarkMode: Bool
 
             Button(onClick = {
                 currentIndex = minOf(cards.size - 1, currentIndex + 1)
+                // ① ボタン押下時に再生位置を保存
+                prefs.edit().putInt(audioIndexKey, currentIndex).apply()
                 if (isPlaying) { playCurrentCard() } else { currentDisplay = "word" }
             }) { Text("Next") }
         }
 
-        Spacer(Modifier.height(24.dp))
+        Spacer(Modifier.height(20.dp))
 
         // ポーズ時間調整スライダー
         Text("Pause Duration: ${String.format("%.1f", pauseSeconds)} sec", fontSize = 14.sp)
@@ -890,10 +943,25 @@ fun AudioPlayerScreen(deckName: String, cards: List<Flashcard>, isDarkMode: Bool
             value = pauseSeconds,
             onValueChange = {
                 pauseSeconds = it
-                if (isPlaying) playCurrentCard() // スライダー変更時にすぐ反映させる
+                if (isPlaying) playCurrentCard()
             },
             valueRange = 1f..5f,
             steps = 8,
+            modifier = Modifier.fillMaxWidth(0.8f)
+        )
+
+        Spacer(Modifier.height(10.dp))
+
+        // ③ 速さ調整スライダーを追加
+        Text("Speech Rate: ${String.format("%.1f", speechRate)}x", fontSize = 14.sp)
+        Slider(
+            value = speechRate,
+            onValueChange = {
+                speechRate = it
+                tts?.setSpeechRate(speechRate) // 変更時にスライダーの速度設定を反映
+            },
+            valueRange = 0.5f..2.0f,
+            steps = 6, // 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0 の刻み
             modifier = Modifier.fillMaxWidth(0.8f)
         )
     }
@@ -917,26 +985,32 @@ fun JsonEditorScreen(
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
                 text = "Editing: $deckName.json",
                 fontWeight = FontWeight.Bold,
-                fontSize = 18.sp
+                fontSize = 18.sp,
+                modifier = Modifier.weight(1f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
             )
-            Row {
+
+            // ボタンエリア（押し出されないようになります）
+            Row(
+                modifier = Modifier.padding(start = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
                 TextButton(onClick = onBack) {
                     Text("Cancel")
                 }
                 Button(onClick = {
-                    // 保存前にJSONの構文チェックを行う
                     try {
                         val format = Json { ignoreUnknownKeys = true }
                         val parsedCards = format.decodeFromString<List<Flashcard>>(jsonText)
                         storageManager.saveCards(deckName, parsedCards)
                         Toast.makeText(context, "Saved Successfully!", Toast.LENGTH_SHORT).show()
-                        onBack() // 成功したら戻る
+                        onBack()
                     } catch (e: Exception) {
                         errorMessage = "JSON Error: ${e.localizedMessage}"
                     }
@@ -961,13 +1035,13 @@ fun JsonEditorScreen(
             value = jsonText,
             onValueChange = {
                 jsonText = it
-                errorMessage = null // 編集したらエラーを一旦消す
+                errorMessage = null
             },
             modifier = Modifier
                 .fillMaxWidth()
-                .weight(1f), // 残りの画面全体を使う
+                .weight(1f),
             textStyle = TextStyle(
-                fontFamily = FontFamily.Monospace, // エディタっぽく等幅フォントに
+                fontFamily = FontFamily.Monospace,
                 fontSize = 14.sp
             ),
             colors = OutlinedTextFieldDefaults.colors(
@@ -978,9 +1052,8 @@ fun JsonEditorScreen(
     }
 }
 
-// Uriからファイル名を取得し、拡張子(.json)を除外する関数
 fun getDeckNameFromUri(context: Context, uri: Uri): String {
-    var fileName = "imported_deck" // 取得できなかった場合のデフォルト名
+    var fileName = "imported_deck"
     context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
         if (cursor.moveToFirst()) {
             val index = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
@@ -989,6 +1062,5 @@ fun getDeckNameFromUri(context: Context, uri: Uri): String {
             }
         }
     }
-    // "my_deck.json" -> "my_deck" のように拡張子をカット
     return fileName.substringBeforeLast(".")
 }
