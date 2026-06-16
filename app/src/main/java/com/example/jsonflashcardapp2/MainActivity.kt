@@ -360,11 +360,7 @@ fun FlashCardApp(
                             Text("Raw JSON Editor")
                         }
 
-                        OutlinedButton(
-                            onClick = { currentMode = "game" },
-                            modifier = Modifier.fillMaxWidth(0.8f).height(50.dp),
-                            colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.secondary)
-                        ) { Text("Mini Game Activate") }
+
                     }
                 }
             } else {
