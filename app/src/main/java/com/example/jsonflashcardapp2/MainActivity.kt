@@ -46,6 +46,12 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import android.provider.OpenableColumns
 import androidx.activity.compose.BackHandler
 import androidx.compose.ui.text.style.TextOverflow
+import android.app.Service
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.content.Intent
+import android.os.IBinder
+import androidx.core.app.NotificationCompat
 
 // 1. データモデル
 @Serializable
@@ -359,8 +365,6 @@ fun FlashCardApp(
                             Spacer(modifier = Modifier.width(8.dp))
                             Text("Raw JSON Editor")
                         }
-
-
                     }
                 }
             } else {
@@ -1059,4 +1063,29 @@ fun getDeckNameFromUri(context: Context, uri: Uri): String {
         }
     }
     return fileName.substringBeforeLast(".")
+}
+
+// 1. バックグラウンドでプロセスを維持するための「サービス」
+class AudioService : Service() {
+    override fun onBind(intent: Intent?): IBinder? = null
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        val channelId = "flashcard_audio_channel"
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                channelId, "音声再生", NotificationManager.IMPORTANCE_LOW
+            )
+            getSystemService(NotificationManager::class.java)?.createNotificationChannel(channel)
+        }
+
+        // バックグラウンド実行をOSに認めてもらうための通知
+        val notification = NotificationCompat.Builder(this, channelId)
+            .setContentTitle("Flash Card App")
+            .setContentText("バックグラウンドで音声を再生中...")
+            .setSmallIcon(android.R.drawable.ic_media_play) // 既存のアイコンで代用
+            .build()
+
+        startForeground(1, notification)
+        return START_STICKY
+    }
 }
