@@ -1,5 +1,6 @@
 package com.example.jsonflashcardapp2
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.net.Uri
 import android.os.Bundle
@@ -39,7 +40,6 @@ import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import java.util.Locale
 import kotlinx.coroutines.launch
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.material3.OutlinedTextFieldDefaults
@@ -52,6 +52,8 @@ import android.app.NotificationManager
 import android.content.Intent
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 
 // 1. データモデル
 @Serializable
@@ -713,6 +715,40 @@ fun StudyScreen(deckName: String, cards: List<Flashcard>, isDarkMode: Boolean, o
 
         Spacer(Modifier.height(16.dp))
 
+        // ==========================================
+        // ▼ 追加：カード位置（枚数）のジャンプバー
+        // ==========================================
+        if (displayCards.size > 1) { // カードが2枚以上ある時だけスライダーを表示
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    text = "カード位置: ${safeIndex + 1} / ${displayCards.size}",
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.Gray
+                )
+
+                Slider(
+                    value = safeIndex.toFloat(),
+                    onValueChange = { newValue ->
+                        currentIndex = newValue.toInt()
+                        // スライダーで移動中は、誤って答えが見えないように必ず表面に戻す
+                        showAnswer = false
+                    },
+                    onValueChangeFinished = {
+                        // 指を離した時に、その位置を進捗として保存する
+                        prefs.edit().putInt(indexKey, currentIndex).apply()
+                    },
+                    valueRange = 0f..(displayCards.size - 1).toFloat(),
+                    modifier = Modifier.fillMaxWidth(0.85f)
+                )
+            }
+            Spacer(Modifier.height(8.dp))
+        }
+        // ==========================================
+
         Row {
             Button(onClick = {
                 currentIndex = (safeIndex - 1 + displayCards.size) % displayCards.size
@@ -742,101 +778,392 @@ fun GameScreen() {
     }, modifier = Modifier.fillMaxSize())
 }
 
-@Composable
-fun AudioPlayerScreen(deckName: String, cards: List<Flashcard>, isDarkMode: Boolean) {
-    val context = LocalContext.current
-    val coroutineScope = rememberCoroutineScope()
+//@Composable
+//fun AudioPlayerScreen(deckName: String, cards: List<Flashcard>, isDarkMode: Boolean) {
+//    val context = LocalContext.current
+//    val coroutineScope = rememberCoroutineScope()
+//
+//    // ① 音声モード進捗保持用の SharedPreferences 設定
+//    val prefs = remember { context.getSharedPreferences("app_prefs", Context.MODE_PRIVATE) }
+//    val audioIndexKey = "audio_index_$deckName"
+//
+//    var tts by remember { mutableStateOf<TextToSpeech?>(null) }
+//    var isPlaying by remember { mutableStateOf(false) }
+//
+//    // ① 保存されていた再生位置の読み込み
+//    val savedIndex = prefs.getInt(audioIndexKey, 0)
+//    var currentIndex by remember(deckName) {
+//        mutableStateOf(savedIndex.coerceIn(0, cards.size - 1))
+//    }
+//
+//    var currentDisplay by remember { mutableStateOf("word") }
+//    var pauseSeconds by remember { mutableStateOf(2f) }
+//    var speechRate by remember { mutableStateOf(1.0f) } // ③ 読み上げ速度用の状態を追加
+//
+//    // ② 見切れ対策用のスクロール状態
+//    val audioScrollState = rememberScrollState()
+//
+//    // カードが切り替わった時、または表示（Word/Ans）が変わった時に最上部へスクロールリセット
+//    LaunchedEffect(currentIndex, currentDisplay) {
+//        audioScrollState.scrollTo(0)
+//    }
+//
+//    fun playCurrentCard() {
+//        if (currentIndex >= cards.size || !isPlaying) {
+//            isPlaying = false
+//            return
+//        }
+//        val card = cards[currentIndex]
+//
+//        // ③ 読み上げ実行の直前に速度を設定する
+//        tts?.setSpeechRate(speechRate)
+//
+//        // 1. 問題の読み上げ
+//        tts?.language = Locale.US
+//        tts?.speak(card.word, TextToSpeech.QUEUE_FLUSH, null, "word_$currentIndex")
+//
+//        // 2. ポーズ
+//        tts?.playSilentUtterance((pauseSeconds * 1000).toLong(), TextToSpeech.QUEUE_ADD, "pause_$currentIndex")
+//
+//        // 3. 答えの読み上げ
+//        tts?.language = Locale.JAPAN
+//        tts?.speak(card.answer, TextToSpeech.QUEUE_ADD, null, "ans_$currentIndex")
+//
+//        // 4. 次へ進む待機
+//        tts?.playSilentUtterance(1500, TextToSpeech.QUEUE_ADD, "next_$currentIndex")
+//    }
+//
+//    DisposableEffect(context) {
+//        val textToSpeech = TextToSpeech(context) { status -> }
+//
+//        textToSpeech.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+//            override fun onStart(utteranceId: String?) {
+//                coroutineScope.launch {
+//                    utteranceId?.let {
+//                        if (it.startsWith("word_")) currentDisplay = "word"
+//                        if (it.startsWith("ans_")) currentDisplay = "ans"
+//                    }
+//                }
+//            }
+//
+//            override fun onDone(utteranceId: String?) {
+//                coroutineScope.launch {
+//                    if (utteranceId?.startsWith("next_") == true && isPlaying) {
+//                        if (currentIndex < cards.size - 1) {
+//                            currentIndex++
+//                            // ① 自動ループ時にも進捗インデックスを永続化
+//                            prefs.edit().putInt(audioIndexKey, currentIndex).apply()
+//                            playCurrentCard()
+//                        } else {
+//                            isPlaying = false
+//                        }
+//                    }
+//                }
+//            }
+//
+//            @Deprecated("Deprecated in Java")
+//            override fun onError(utteranceId: String?) {
+//                coroutineScope.launch { isPlaying = false }
+//            }
+//        })
+//
+//        tts = textToSpeech
+//
+//        onDispose {
+//            textToSpeech.stop()
+//            textToSpeech.shutdown()
+//        }
+//    }
+//
+//    if (cards.isEmpty()) {
+//        Box(Modifier.fillMaxSize(), Alignment.Center) { Text("カードがありません") }
+//        return
+//    }
+//
+//    val safeIndex = currentIndex.coerceIn(0, cards.size - 1)
+//    val currentCard = cards[safeIndex]
+//
+//    Column(
+//        modifier = Modifier.fillMaxSize().padding(16.dp),
+//        horizontalAlignment = Alignment.CenterHorizontally,
+//        verticalArrangement = Arrangement.Center
+//    ) {
+//        Text("Listening: $deckName (${safeIndex + 1}/${cards.size})", fontWeight = FontWeight.Bold)
+//        Spacer(Modifier.height(16.dp))
+//
+//        // カード表示領域
+//        Card(
+//            modifier = Modifier.fillMaxWidth().height(250.dp),
+//            elevation = CardDefaults.cardElevation(8.dp),
+//            colors = CardDefaults.cardColors(
+//                containerColor = if (isDarkMode) MaterialTheme.colorScheme.surfaceVariant else Color.White
+//            )
+//        ) {
+//            // ② 縦スクロール（verticalScroll）を付与して見切れを完全に防ぐ
+//            Column(
+//                modifier = Modifier
+//                    .fillMaxSize()
+//                    .padding(16.dp)
+//                    .verticalScroll(audioScrollState),
+//                verticalArrangement = Arrangement.Center,
+//                horizontalAlignment = Alignment.CenterHorizontally
+//            ) {
+//                // 長文に対応した文字サイズ調整
+//                val wordFontSize = if (currentCard.word.length > 30) 20.sp else 28.sp
+//                val answerFontSize = if (currentCard.answer.length > 30) 18.sp else 24.sp
+//
+//                Text(
+//                    text = currentCard.word,
+//                    fontSize = wordFontSize,
+//                    fontWeight = FontWeight.ExtraBold,
+//                    color = if (currentDisplay == "word") MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+//                )
+//
+//                Spacer(modifier = Modifier.height(24.dp))
+//
+//                if (currentDisplay == "ans") {
+//                    Text(
+//                        text = currentCard.answer,
+//                        fontSize = answerFontSize,
+//                        color = MaterialTheme.colorScheme.secondary
+//                    )
+//                }
+//            }
+//        }
+//
+//        Spacer(Modifier.height(24.dp))
+//
+//        // ==========================================
+//        // ▼ 追加：カード再生位置（枚数）のジャンプバー
+//        // ==========================================
+//        Column(
+//            modifier = Modifier.fillMaxWidth(),
+//            horizontalAlignment = Alignment.CenterHorizontally
+//        ) {
+//            Text(
+//                text = "再生位置: ${currentIndex + 1} / ${cards.size}",
+//                fontSize = 14.sp,
+//                fontWeight = FontWeight.Bold
+//            )
+//
+//            Slider(
+//                value = currentIndex.toFloat(),
+//                onValueChange = { newValue ->
+//                    // スライダーを動かしている最中はインデックスだけを更新し、表示を単語(word)に戻す
+//                    val newIndex = newValue.toInt()
+//                    AudioPlayerManager.currentIndex.value = newIndex
+//                    AudioPlayerManager.currentDisplay.value = "word"
+//                },
+//                onValueChangeFinished = {
+//                    // スライダーから指を離した瞬間に、その位置を保存する
+//                    context.getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
+//                        .edit().putInt("audio_index_$deckName", AudioPlayerManager.currentIndex.value).apply()
+//
+//                    // もし再生中(Play状態)にバーをいじったなら、指を離した位置からすぐ読み上げを再開させる
+//                    if (isPlaying) {
+//                        AudioPlayerManager.playCurrentCard()
+//                    }
+//                },
+//                valueRange = 0f..maxOf(0f, (cards.size - 1).toFloat()),
+//                modifier = Modifier.fillMaxWidth(0.85f)
+//            )
+//        }
+//        // ==========================================
+//
+//        // コントロールパネル
+//        Row(
+//            verticalAlignment = Alignment.CenterVertically,
+//            horizontalArrangement = Arrangement.spacedBy(16.dp)
+//        ) {
+//            Button(onClick = {
+//                currentIndex = maxOf(0, currentIndex - 1)
+//                // ① ボタン押下時に再生位置を保存
+//                prefs.edit().putInt(audioIndexKey, currentIndex).apply()
+//                if (isPlaying) { playCurrentCard() } else { currentDisplay = "word" }
+//            }) { Text("Prev") }
+//
+//            if (isPlaying) {
+//                Button(
+//                    onClick = {
+//                        isPlaying = false
+//                        tts?.stop()
+//                    },
+//                    colors = ButtonDefaults.buttonColors(containerColor = Color.Red)
+//                ) { Text("Stop") }
+//            } else {
+//                Button(
+//                    onClick = {
+//                        isPlaying = true
+//                        playCurrentCard()
+//                    },
+//                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4CAF50))
+//                ) { Text("Play") }
+//            }
+//
+//            Button(onClick = {
+//                currentIndex = minOf(cards.size - 1, currentIndex + 1)
+//                // ① ボタン押下時に再生位置を保存
+//                prefs.edit().putInt(audioIndexKey, currentIndex).apply()
+//                if (isPlaying) { playCurrentCard() } else { currentDisplay = "word" }
+//            }) { Text("Next") }
+//        }
+//
+//        Spacer(Modifier.height(20.dp))
+//
+//        // ポーズ時間調整スライダー
+//        Text("Pause Duration: ${String.format("%.1f", pauseSeconds)} sec", fontSize = 14.sp)
+//        Slider(
+//            value = pauseSeconds,
+//            onValueChange = {
+//                pauseSeconds = it
+//                if (isPlaying) playCurrentCard()
+//            },
+//            valueRange = 1f..5f,
+//            steps = 8,
+//            modifier = Modifier.fillMaxWidth(0.8f)
+//        )
+//
+//        Spacer(Modifier.height(10.dp))
+//
+//        // ③ 速さ調整スライダーを追加
+//        Text("Speech Rate: ${String.format("%.1f", speechRate)}x", fontSize = 14.sp)
+//        Slider(
+//            value = speechRate,
+//            onValueChange = {
+//                speechRate = it
+//                tts?.setSpeechRate(speechRate) // 変更時にスライダーの速度設定を反映
+//            },
+//            valueRange = 0.5f..2.0f,
+//            steps = 6, // 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0 の刻み
+//            modifier = Modifier.fillMaxWidth(0.8f)
+//        )
+//    }
+//}
 
-    // ① 音声モード進捗保持用の SharedPreferences 設定
-    val prefs = remember { context.getSharedPreferences("app_prefs", Context.MODE_PRIVATE) }
-    val audioIndexKey = "audio_index_$deckName"
+// ==========================================
+// 1. 音声処理を画面から独立させた管理者（お引越し先）
+// ==========================================
+object AudioPlayerManager {
+    val isPlaying = mutableStateOf(false)
+    val currentIndex = mutableStateOf(0)
+    val currentDisplay = mutableStateOf("word")
+    val pauseSeconds = mutableStateOf(2f)
+    val speechRate = mutableStateOf(1.0f)
 
-    var tts by remember { mutableStateOf<TextToSpeech?>(null) }
-    var isPlaying by remember { mutableStateOf(false) }
+    private var tts: TextToSpeech? = null
+    private var cards: List<Flashcard> = emptyList()
+    @SuppressLint("StaticFieldLeak")
+    private var deckName: String = ""
+    private var prefs: android.content.SharedPreferences? = null
+    private var context: Context? = null
+    private val scope = CoroutineScope(Dispatchers.Main)
 
-    // ① 保存されていた再生位置の読み込み
-    val savedIndex = prefs.getInt(audioIndexKey, 0)
-    var currentIndex by remember(deckName) {
-        mutableStateOf(savedIndex.coerceIn(0, cards.size - 1))
-    }
+    fun initialize(ctx: Context, newCards: List<Flashcard>, newDeckName: String) {
+        if (deckName == newDeckName && cards == newCards && tts != null) return
 
-    var currentDisplay by remember { mutableStateOf("word") }
-    var pauseSeconds by remember { mutableStateOf(2f) }
-    var speechRate by remember { mutableStateOf(1.0f) } // ③ 読み上げ速度用の状態を追加
+        context = ctx.applicationContext
+        cards = newCards
+        deckName = newDeckName
+        prefs = context?.getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
 
-    // ② 見切れ対策用のスクロール状態
-    val audioScrollState = rememberScrollState()
+        val savedIndex = prefs?.getInt("audio_index_$deckName", 0) ?: 0
+        currentIndex.value = savedIndex.coerceIn(0, maxOf(0, cards.size - 1))
 
-    // カードが切り替わった時、または表示（Word/Ans）が変わった時に最上部へスクロールリセット
-    LaunchedEffect(currentIndex, currentDisplay) {
-        audioScrollState.scrollTo(0)
-    }
-
-    fun playCurrentCard() {
-        if (currentIndex >= cards.size || !isPlaying) {
-            isPlaying = false
-            return
-        }
-        val card = cards[currentIndex]
-
-        // ③ 読み上げ実行の直前に速度を設定する
-        tts?.setSpeechRate(speechRate)
-
-        // 1. 問題の読み上げ
-        tts?.language = Locale.US
-        tts?.speak(card.word, TextToSpeech.QUEUE_FLUSH, null, "word_$currentIndex")
-
-        // 2. ポーズ
-        tts?.playSilentUtterance((pauseSeconds * 1000).toLong(), TextToSpeech.QUEUE_ADD, "pause_$currentIndex")
-
-        // 3. 答えの読み上げ
-        tts?.language = Locale.JAPAN
-        tts?.speak(card.answer, TextToSpeech.QUEUE_ADD, null, "ans_$currentIndex")
-
-        // 4. 次へ進む待機
-        tts?.playSilentUtterance(1500, TextToSpeech.QUEUE_ADD, "next_$currentIndex")
-    }
-
-    DisposableEffect(context) {
-        val textToSpeech = TextToSpeech(context) { status -> }
-
-        textToSpeech.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-            override fun onStart(utteranceId: String?) {
-                coroutineScope.launch {
-                    utteranceId?.let {
-                        if (it.startsWith("word_")) currentDisplay = "word"
-                        if (it.startsWith("ans_")) currentDisplay = "ans"
+        if (tts == null) {
+            tts = TextToSpeech(context) { _ -> }
+            tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+                override fun onStart(utteranceId: String?) {
+                    scope.launch {
+                        if (utteranceId?.startsWith("word_") == true) currentDisplay.value = "word"
+                        if (utteranceId?.startsWith("ans_") == true) currentDisplay.value = "ans"
                     }
                 }
-            }
-
-            override fun onDone(utteranceId: String?) {
-                coroutineScope.launch {
-                    if (utteranceId?.startsWith("next_") == true && isPlaying) {
-                        if (currentIndex < cards.size - 1) {
-                            currentIndex++
-                            // ① 自動ループ時にも進捗インデックスを永続化
-                            prefs.edit().putInt(audioIndexKey, currentIndex).apply()
-                            playCurrentCard()
-                        } else {
-                            isPlaying = false
+                override fun onDone(utteranceId: String?) {
+                    scope.launch {
+                        if (utteranceId?.startsWith("next_") == true && isPlaying.value) {
+                            if (currentIndex.value < cards.size - 1) {
+                                currentIndex.value++
+                                prefs?.edit()?.putInt("audio_index_$deckName", currentIndex.value)?.apply()
+                                playCurrentCard()
+                            } else {
+                                stop()
+                            }
                         }
                     }
                 }
-            }
-
-            @Deprecated("Deprecated in Java")
-            override fun onError(utteranceId: String?) {
-                coroutineScope.launch { isPlaying = false }
-            }
-        })
-
-        tts = textToSpeech
-
-        onDispose {
-            textToSpeech.stop()
-            textToSpeech.shutdown()
+                @Deprecated("Deprecated in Java")
+                override fun onError(utteranceId: String?) {
+                    scope.launch { stop() }
+                }
+            })
         }
+    }
+
+    fun play() {
+        if (cards.isEmpty()) return
+        isPlaying.value = true
+
+        // バックグラウンド用のサービスを起動
+        val intent = Intent(context, AudioService::class.java)
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+            context?.startForegroundService(intent)
+        } else {
+            context?.startService(intent)
+        }
+        playCurrentCard()
+    }
+
+    fun stop() {
+        isPlaying.value = false
+        tts?.stop()
+        currentDisplay.value = "word"
+
+        // バックグラウンド用のサービスを停止
+        val intent = Intent(context, AudioService::class.java)
+        context?.stopService(intent)
+    }
+
+    fun playCurrentCard() {
+        if (currentIndex.value >= cards.size || !isPlaying.value) {
+            stop()
+            return
+        }
+        val card = cards[currentIndex.value]
+        tts?.setSpeechRate(speechRate.value)
+
+        tts?.language = Locale.US
+        tts?.speak(card.word, TextToSpeech.QUEUE_FLUSH, null, "word_${currentIndex.value}")
+        tts?.playSilentUtterance((pauseSeconds.value * 1000).toLong(), TextToSpeech.QUEUE_ADD, "pause_${currentIndex.value}")
+
+        tts?.language = Locale.JAPAN
+        tts?.speak(card.answer, TextToSpeech.QUEUE_ADD, null, "ans_${currentIndex.value}")
+        tts?.playSilentUtterance(1500, TextToSpeech.QUEUE_ADD, "next_${currentIndex.value}")
+    }
+}
+
+// ==========================================
+// 2. 新しいUI画面（音声処理を持たず、管理者を見るだけ）
+// ==========================================
+@Composable
+fun AudioPlayerScreen(deckName: String, cards: List<Flashcard>, isDarkMode: Boolean) {
+    val context = LocalContext.current
+
+    // 画面を開いた時にデータを管理者に渡す
+    LaunchedEffect(deckName, cards) {
+        AudioPlayerManager.initialize(context, cards, deckName)
+    }
+
+    // 管理者の状態を監視（Observe）する
+    val isPlaying by AudioPlayerManager.isPlaying
+    val currentIndex by AudioPlayerManager.currentIndex
+    val currentDisplay by AudioPlayerManager.currentDisplay
+    val pauseSeconds by AudioPlayerManager.pauseSeconds
+    val speechRate by AudioPlayerManager.speechRate
+
+    val audioScrollState = rememberScrollState()
+
+    LaunchedEffect(currentIndex, currentDisplay) {
+        audioScrollState.scrollTo(0)
     }
 
     if (cards.isEmpty()) {
@@ -855,7 +1182,6 @@ fun AudioPlayerScreen(deckName: String, cards: List<Flashcard>, isDarkMode: Bool
         Text("Listening: $deckName (${safeIndex + 1}/${cards.size})", fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(16.dp))
 
-        // カード表示領域
         Card(
             modifier = Modifier.fillMaxWidth().height(250.dp),
             elevation = CardDefaults.cardElevation(8.dp),
@@ -863,7 +1189,6 @@ fun AudioPlayerScreen(deckName: String, cards: List<Flashcard>, isDarkMode: Bool
                 containerColor = if (isDarkMode) MaterialTheme.colorScheme.surfaceVariant else Color.White
             )
         ) {
-            // ② 縦スクロール（verticalScroll）を付与して見切れを完全に防ぐ
             Column(
                 modifier = Modifier
                     .fillMaxSize()
@@ -872,7 +1197,6 @@ fun AudioPlayerScreen(deckName: String, cards: List<Flashcard>, isDarkMode: Bool
                 verticalArrangement = Arrangement.Center,
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                // 長文に対応した文字サイズ調整
                 val wordFontSize = if (currentCard.word.length > 30) 20.sp else 28.sp
                 val answerFontSize = if (currentCard.answer.length > 30) 18.sp else 24.sp
 
@@ -897,71 +1221,93 @@ fun AudioPlayerScreen(deckName: String, cards: List<Flashcard>, isDarkMode: Bool
 
         Spacer(Modifier.height(24.dp))
 
-        // コントロールパネル
+        // ジャンプバー
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text(
+                text = "再生位置: ${currentIndex + 1} / ${cards.size}",
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Bold
+            )
+
+            Slider(
+                value = currentIndex.toFloat(),
+                onValueChange = { newValue ->
+                    AudioPlayerManager.currentIndex.value = newValue.toInt()
+                    AudioPlayerManager.currentDisplay.value = "word"
+                },
+                onValueChangeFinished = {
+                    context.getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
+                        .edit().putInt("audio_index_$deckName", AudioPlayerManager.currentIndex.value).apply()
+
+                    if (isPlaying) {
+                        AudioPlayerManager.playCurrentCard()
+                    }
+                },
+                valueRange = 0f..maxOf(0f, (cards.size - 1).toFloat()),
+                modifier = Modifier.fillMaxWidth(0.85f)
+            )
+        }
+
+        // コントロールボタン
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             Button(onClick = {
-                currentIndex = maxOf(0, currentIndex - 1)
-                // ① ボタン押下時に再生位置を保存
-                prefs.edit().putInt(audioIndexKey, currentIndex).apply()
-                if (isPlaying) { playCurrentCard() } else { currentDisplay = "word" }
+                AudioPlayerManager.currentIndex.value = maxOf(0, AudioPlayerManager.currentIndex.value - 1)
+                context.getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
+                    .edit().putInt("audio_index_$deckName", AudioPlayerManager.currentIndex.value).apply()
+                if (isPlaying) { AudioPlayerManager.playCurrentCard() } else { AudioPlayerManager.currentDisplay.value = "word" }
             }) { Text("Prev") }
 
             if (isPlaying) {
                 Button(
-                    onClick = {
-                        isPlaying = false
-                        tts?.stop()
-                    },
+                    onClick = { AudioPlayerManager.stop() },
                     colors = ButtonDefaults.buttonColors(containerColor = Color.Red)
                 ) { Text("Stop") }
             } else {
                 Button(
-                    onClick = {
-                        isPlaying = true
-                        playCurrentCard()
-                    },
+                    onClick = { AudioPlayerManager.play() },
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4CAF50))
                 ) { Text("Play") }
             }
 
             Button(onClick = {
-                currentIndex = minOf(cards.size - 1, currentIndex + 1)
-                // ① ボタン押下時に再生位置を保存
-                prefs.edit().putInt(audioIndexKey, currentIndex).apply()
-                if (isPlaying) { playCurrentCard() } else { currentDisplay = "word" }
+                AudioPlayerManager.currentIndex.value = minOf(cards.size - 1, AudioPlayerManager.currentIndex.value + 1)
+                context.getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
+                    .edit().putInt("audio_index_$deckName", AudioPlayerManager.currentIndex.value).apply()
+                if (isPlaying) { AudioPlayerManager.playCurrentCard() } else { AudioPlayerManager.currentDisplay.value = "word" }
             }) { Text("Next") }
         }
 
         Spacer(Modifier.height(20.dp))
 
-        // ポーズ時間調整スライダー
-        Text("Pause Duration: ${String.format("%.1f", pauseSeconds)} sec", fontSize = 14.sp)
-        Slider(
-            value = pauseSeconds,
-            onValueChange = {
-                pauseSeconds = it
-                if (isPlaying) playCurrentCard()
-            },
-            valueRange = 1f..5f,
-            steps = 8,
-            modifier = Modifier.fillMaxWidth(0.8f)
-        )
+//        Text("Pause Duration: ${String.format("%.1f", pauseSeconds)} sec", fontSize = 14.sp)
+//        Slider(
+//            value = pauseSeconds,
+//            onValueChange = {
+//                AudioPlayerManager.pauseSeconds.value = it
+//                if (isPlaying) AudioPlayerManager.playCurrentCard()
+//            },
+//            valueRange = 1f..5f,
+//            steps = 8,
+//            modifier = Modifier.fillMaxWidth(0.8f)
+//        )
 
         Spacer(Modifier.height(10.dp))
 
-        // ③ 速さ調整スライダーを追加
         Text("Speech Rate: ${String.format("%.1f", speechRate)}x", fontSize = 14.sp)
         Slider(
             value = speechRate,
             onValueChange = {
-                speechRate = it
-                tts?.setSpeechRate(speechRate) // 変更時にスライダーの速度設定を反映
+                AudioPlayerManager.speechRate.value = it
+                if (isPlaying) AudioPlayerManager.playCurrentCard()
             },
             valueRange = 0.5f..2.0f,
-            steps = 6, // 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0 の刻み
+            steps = 6,
             modifier = Modifier.fillMaxWidth(0.8f)
         )
     }
