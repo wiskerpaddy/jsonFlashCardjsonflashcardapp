@@ -54,6 +54,7 @@ import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import android.os.PowerManager
 
 // 1. データモデル
 @Serializable
@@ -1058,6 +1059,9 @@ object AudioPlayerManager {
     private var context: Context? = null
     private val scope = CoroutineScope(Dispatchers.Main)
 
+    // ▼ 追加: WakeLockを保持する変数
+    private var wakeLock: PowerManager.WakeLock? = null
+
     fun initialize(ctx: Context, newCards: List<Flashcard>, newDeckName: String) {
         if (deckName == newDeckName && cards == newCards && tts != null) return
 
@@ -1117,6 +1121,12 @@ object AudioPlayerManager {
         isPlaying.value = false
         tts?.stop()
         currentDisplay.value = "word"
+
+        // ▼ 追加: 停止時は忘れずに WakeLock を解放してバッテリー消費を防ぐ
+        if (wakeLock?.isHeld == true) {
+            wakeLock?.release()
+        }
+        wakeLock = null
 
         // バックグラウンド用のサービスを停止
         val intent = Intent(context, AudioService::class.java)
